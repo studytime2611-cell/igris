@@ -1,5 +1,6 @@
 const KEY='igris-neet-v1';
 const BASE_TITLE='IGRIS — NEET Command Center';
+const MISSION_TYPES=['Practice','Revision','Lecture'];
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
 const addDays=(isoDate,days)=>{
   const [y,m,d]=String(isoDate||today()).split('-').map(Number);
@@ -420,13 +421,88 @@ function dashboard(){
   </div>`;
 }
 
+function normalizeMissionType(t={}){
+  if(t.missionType && MISSION_TYPES.includes(t.missionType))return t.missionType;
+  const s=`${t.text||''} ${t.subject||''}`.toLowerCase();
+  if(/\b(lec|lecture|class|video|oneshot|one shot)\b/.test(s))return 'Lecture';
+  if(/\b(rev|revision|revise|notes|ncert|recall)\b/.test(s))return 'Revision';
+  return 'Practice';
+}
+
+function missionTypeTagClass(mType){
+  if(mType==='Practice')return 'tag blue';
+  if(mType==='Revision')return 'tag gold';
+  return 'tag purple';
+}
+
+window.startMissionFocus=(id)=>{
+  const t=db.tasks.find(x=>x.id===id);
+  const mins=parseInt(t?.focusMins,10);
+  if(!t||!mins||mins<1){toast('Is mission ki focus duration set nahi hai.');return}
+  clearInterval(timerInterval);
+  timerRunning=false;
+  topBannerHidden=false;
+  timerInitial=mins*60;
+  timerSeconds=mins*60;
+  navigate('focus');
+  updateTimerDOM();
+  toast(`Focus timer set to ${mins}m for "${t.text}"`);
+};
+
 function taskHTML(t){
   const carried=!t.done&&t.date<today();
+  const mType=normalizeMissionType(t);
   const old=carried?`<span class="tag gold">Carried over • ${dateText(t.date)}</span>`:'';
   const rem=!t.done&&t.reminderAt?`<span class="reminder-chip">⏰ ${esc(formatReminderLabel(t.reminderAt))}${t.reminded?' • Sent':''}</span>`:'';
   const remActions=!t.done&&t.reminderAt?`<button type="button" class="icon-btn" style="padding:2px 6px;font-size:10px" title="Snooze 10m" onclick="snoozeTaskReminder('${t.id}',10)">+10m</button><button type="button" class="icon-btn" style="padding:2px 6px;font-size:10px" title="Clear reminder" onclick="clearTaskReminder('${t.id}')">🔕</button>`:'';
-  return `<label class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span>${old}${rem}${remActions}<small>${esc(t.subject||'GENERAL')}</small><button type="button" class="icon-btn" style="padding:3px 7px" onclick="deleteTask('${t.id}')">×</button></label>`;
+  const fBtn=!t.done&&t.focusMins?`<button type="button" class="btn secondary" style="padding:2px 7px;font-size:10px" onclick="startMissionFocus('${t.id}')">▶ ${t.focusMins}m</button>`:'';
+  return `<label class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span><span class="${missionTypeTagClass(mType)}">${esc(mType)}</span>${old}${rem}${remActions}${fBtn}<small>${esc(t.subject||'GENERAL')}</small><button type="button" class="icon-btn" style="padding:2px 6px" onclick="deleteTask('${t.id}')">×</button></label>`;
 }
+
+function groupedMissionsHTML(list,emptyMsg){
+  if(!list.length)return `<div class="empty">${emptyMsg}</div>`;
+  const subs=['Physics','Chemistry','Biology'];
+  const subIcons={Physics:'⚛',Chemistry:'⚗',Biology:'🧬'};
+  const blocks=subs.map(sub=>{
+    const subItems=list.filter(t=>(t.subject||'General').toLowerCase()===sub.toLowerCase());
+    if(!subItems.length)return '';
+    return `<div class="sub-group-box">
+      <div class="sub-group-head">
+        <span class="sub-group-title">${subIcons[sub]} ${sub}</span>
+        <span class="tag blue">${subItems.length}</span>
+      </div>
+      <div class="type-blocks-grid">
+        ${MISSION_TYPES.map(mType=>{
+          const items=subItems.filter(t=>normalizeMissionType(t)===mType);
+          return `<div class="type-block">
+            <div class="type-block-head"><span>${mType}</span><span>${items.length}</span></div>
+            ${items.length?items.map(taskHTML).join(''):`<div class="muted" style="font-size:10px;padding:6px 0">No ${mType.toLowerCase()}</div>`}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  const otherItems=list.filter(t=>!subs.some(s=>(t.subject||'General').toLowerCase()===s.toLowerCase()));
+  const otherHtml=otherItems.length?`<div class="sub-group-box">
+    <div class="sub-group-head">
+      <span class="sub-group-title">📌 General / Other</span>
+      <span class="tag gold">${otherItems.length}</span>
+    </div>
+    <div class="type-blocks-grid">
+      ${MISSION_TYPES.map(mType=>{
+        const items=otherItems.filter(t=>normalizeMissionType(t)===mType);
+        return `<div class="type-block">
+          <div class="type-block-head"><span>${mType}</span><span>${items.length}</span></div>
+          ${items.length?items.map(taskHTML).join(''):`<div class="muted" style="font-size:10px;padding:6px 0">No ${mType.toLowerCase()}</div>`}
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`:'';
+
+  return blocks+otherHtml;
+}
+
 function recentActivity(){let items=[...db.sessions.map(x=>({date:x.date,text:`Focus session • ${x.subject} • ${x.minutes} min${x.questions?' • '+x.questions+' Qs':''}`})),...db.tests.map(x=>({date:x.date,text:`Mock test • ${x.name} • ${x.score} marks`})),...(db.quizAttempts||[]).map(x=>({date:x.date,text:`Quiz (${x.chapter}) • ${x.score}/${x.total} (${x.accuracy}%)`})),...allRevs().slice(0,5).map(x=>({date:x.date,text:`Revision • ${x.chapter} (${x.kind})`}))].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);return items.length?items.map(x=>`<div class="list-item"><span>${esc(x.text)}</span><span class="muted">${x.date}</span></div>`).join(''):'<div class="empty">Your activity will appear here as you use IGRIS.</div>'}
 function tabsHTML(cur,open,closed,fn){return `<div class="tabs"><button type="button" class="tab ${cur==='open'?'active':''}" onclick="${fn}('open')">Open <b>${open}</b></button><button type="button" class="tab ${cur==='closed'?'active':''}" onclick="${fn}('closed')">Closed <b>${closed}</b></button></div>`}
 
@@ -438,11 +514,25 @@ function suggestMissionSubject(txt=''){
   return null;
 }
 
+function suggestMissionType(txt=''){
+  const s=txt.toLowerCase();
+  if(/\b(lec|lecture|class|video|oneshot|one shot)\b/.test(s))return 'Lecture';
+  if(/\b(rev|revision|revise|notes|ncert|recall)\b/.test(s))return 'Revision';
+  if(/\b(mcq|pyq|dpp|practice|question|numerical|test)\b/.test(s))return 'Practice';
+  return null;
+}
+
 window.onMissionDescInput=el=>{
   const sel=document.querySelector('#taskForm select[name="subject"]');
-  if(!sel || sel.dataset.manual==='1')return;
-  const hit=suggestMissionSubject(el.value);
-  if(hit)sel.value=hit;
+  if(sel && sel.dataset.manual!=='1'){
+    const hit=suggestMissionSubject(el.value);
+    if(hit)sel.value=hit;
+  }
+  const typeSel=document.querySelector('#taskForm select[name="missionType"]');
+  if(typeSel && typeSel.dataset.manual!=='1'){
+    const tHit=suggestMissionType(el.value);
+    if(tHit)typeSel.value=tHit;
+  }
 };
 
 function missions(){
@@ -452,12 +542,16 @@ function missions(){
   const notifyStatus=('Notification' in window)?Notification.permission:'unsupported';
   return `<div class="section-head"><h2>Mission Board</h2><small>${dateText()} • ${td}/${tt.length} TODAY</small></div>
   <div class="two-col">
-    <div class="card"><h3>Your missions</h3>${tabsHTML(missionTab,open.length,closed.length,'setMissionTab')}${list.length?list.map(taskHTML).join(''):`<div class="empty">${empty}</div>`}<div style="margin-top:12px">${progress('TODAY’S COMPLETION',td,tt.length)}</div></div>
+    <div class="card"><h3>Your missions (${missionTab==='open'?'Open':'Closed'})</h3>${tabsHTML(missionTab,open.length,closed.length,'setMissionTab')}${groupedMissionsHTML(list,empty)}<div style="margin-top:12px">${progress('TODAY’S COMPLETION',td,tt.length)}</div></div>
     <div class="card"><h3>Deploy a new mission</h3>
       <form id="taskForm">
-        <div class="field"><label>TASK DESCRIPTION</label><input name="text" placeholder="e.g. Revise NLM notes + 30 MCQs" oninput="onMissionDescInput(this)" required></div>
+        <div class="field"><label>TASK DESCRIPTION</label><input name="text" placeholder="e.g. Redox rxn lec -02 / 30 MCQs" oninput="onMissionDescInput(this)" required></div>
         <div class="form-grid">
           <div class="field"><label>SUBJECT</label><select name="subject" onchange="this.dataset.manual='1'"><option>General</option><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
+          <div class="field"><label>MISSION TYPE TAG</label><select name="missionType" onchange="this.dataset.manual='1'"><option value="Practice">Practice</option><option value="Revision">Revision</option><option value="Lecture">Lecture</option></select></div>
+        </div>
+        <div class="form-grid">
+          <div class="field"><label>FOCUS DURATION (MINS)</label><input name="focusMins" type="number" min="1" max="720" placeholder="e.g. 45"></div>
           <div class="field"><label>REMINDER TIME (OPTIONAL)</label><input type="datetime-local" name="reminderAt"></div>
         </div>
         <div class="actions" style="margin-top:4px">
@@ -465,7 +559,7 @@ function missions(){
           <button type="button" class="btn secondary" onclick="requestBrowserNotifyPermission()">🔔 Top Alert (${esc(notifyStatus)})</button>
         </div>
       </form>
-      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open missions carry over until you close them. Reminder time set karne par due hone par top banner + browser notification aayegi.</p>
+      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open aur Closed dono lists Physics, Chemistry aur Biology mein banti hain — har subject ke andar Practice, Revision aur Lecture ke alag blocks hain.</p>
     </div>
   </div>`;
 }
@@ -1456,19 +1550,28 @@ function bindForms(){
   const bind=(id,fn)=>{const el=document.getElementById(id);if(el)el.onsubmit=async e=>{e.preventDefault();await fn(el)}};
   bind('taskForm',f=>{
     const remVal=(f.reminderAt?.value||'').trim();
+    const fMins=parseInt(f.focusMins?.value,10);
+    const mType=f.missionType?.value||suggestMissionType(f.text.value)||'Practice';
     const taskDate=remVal&&/^\d{4}-\d{2}-\d{2}/.test(remVal)?remVal.slice(0,10):today();
     db.tasks.push({
       id:crypto.randomUUID(),
       date:taskDate,
       text:f.text.value.trim(),
       subject:f.subject.value,
+      missionType:mType,
       done:false,
+      ...(fMins>0?{focusMins:fMins}:{}),
       ...(remVal?{reminderAt:remVal,reminded:false}:{})
     });
+    if(fMins>0 && !timerRunning){
+      clearInterval(timerInterval);
+      timerInitial=fMins*60;
+      timerSeconds=fMins*60;
+    }
     save();
     checkDueReminders();
     render();
-    toast(remVal?'Mission & reminder added.':'Mission added.');
+    toast(fMins>0?`Mission (${mType}) & ${fMins}m focus saved.`:`Mission (${mType}) added.`);
   });
   bind('sessionForm',f=>{
     const mins=parseInt(f.minutes.value,10);
