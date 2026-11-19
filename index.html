@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#09090d">
+<title>IGRIS — NEET Command Center</title>
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand"><div class="brand-mark">I</div><div><b>IGRIS</b><small>NEET COMMAND CENTER</small></div></div>
+    <div class="side-label">COMMAND</div>
+    <button class="nav active" data-view="dashboard">⌂ <span>Dashboard</span></button>
+    <button class="nav" data-view="missions">⚔ <span>Daily Missions</span></button>
+    <button class="nav" data-view="subjects">▤ <span>Subject HQ</span></button>
+    <button class="nav" data-view="focus">◷ <span>Focus Room</span></button>
+    <button class="nav" data-view="mistakes">✧ <span>Mistake Hunter</span></button>
+    <button class="nav" data-view="revision">↻ <span>Revision Log</span></button>
+    <button class="nav" data-view="tests">▥ <span>Mock Tests</span></button>
+    <div class="sidebar-bottom"><div class="system-status"><span class="pulse"></span> LOCAL SYSTEM ONLINE</div><small>SHADOW KNIGHT • NEET 2027</small></div>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <button class="mobile-menu" id="menuBtn" aria-label="Open menu">☰</button>
+      <div><div class="eyebrow" id="todayLabel">YOUR TRAINING GROUND</div><div class="top-title" id="viewTitle">Dashboard</div></div>
+      <div class="top-actions"><span class="date-chip" id="dateChip"></span><button class="icon-btn" id="exportBtn" title="Export backup">⇧</button></div>
+    </header>
+    <section id="view" class="view"></section>
+    <footer>IGRIS SYSTEM <span>•</span> Progress over perfection. Keep moving.</footer>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+<input type="file" id="importFile" accept="application/json" hidden>
+<script src="app.js"></script>
+</body>
+</html>
