@@ -734,7 +734,7 @@ window.answerQuizOpt=(choiceIdx)=>{
   quizAnswered=true;
   quizPickedIdx=choiceIdx;
   const curQ=activeQuiz[quizIdx];
-  const mk=normalizeMark(curQ.mark||q.tag);
+  const mk=normalizeMark(curQ.mark||curQ.tag);
   const isCorrect=choiceIdx===curQ.ans;
   const trueAnsText=curQ.opts[curQ.ans];
   if(isCorrect)quizScore++;
