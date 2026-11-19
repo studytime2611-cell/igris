@@ -11,7 +11,10 @@
 <body>
 <div class="app-shell">
   <aside class="sidebar" id="sidebar">
-    <div class="brand"><div class="brand-mark">I</div><div><b>IGRIS</b><small>NEET COMMAND CENTER</small></div></div>
+    <div class="brand">
+      <div class="brand-mark">I💙</div>
+      <div><b>IGRIS 💙</b><small>NEET COMMAND CENTER</small></div>
+    </div>
     <div class="side-label">COMMAND</div>
     <button class="nav active" data-view="dashboard">⌂ <span>Dashboard</span></button>
     <button class="nav" data-view="missions">⚔ <span>Daily Missions</span></button>
@@ -20,19 +23,42 @@
     <button class="nav" data-view="mistakes">✧ <span>Mistake Hunter</span></button>
     <button class="nav" data-view="revision">↻ <span>Revision Log</span></button>
     <button class="nav" data-view="tests">▥ <span>Mock Tests</span></button>
+    <button class="nav" data-view="vault">🗂 <span>Study Vault</span></button>
     <button class="nav" data-view="analytics">📈 <span>Analytics</span></button>
-    <div class="sidebar-bottom"><div class="system-status"><span class="pulse"></span> LOCAL SYSTEM ONLINE</div><small>𓆩⚔️𓆪 IGRIS 💙 • NEET 2027</small></div>
+    <div class="sidebar-bottom">
+      <div class="system-status"><span class="pulse"></span> LOCAL SYSTEM ONLINE</div>
+      <small>𓆩⚔️𓆪 IGRIS 💙 • NEET 2027</small>
+    </div>
   </aside>
   <main class="main">
     <header class="topbar">
       <button class="mobile-menu" id="menuBtn" aria-label="Open menu">☰</button>
-      <div><div class="eyebrow" id="todayLabel">YOUR TRAINING GROUND</div><div class="top-title" id="viewTitle">Dashboard</div></div>
-      <div class="top-actions"><span class="date-chip" id="dateChip"></span><button class="icon-btn" id="importBtn" title="Import backup">⇩</button><button class="icon-btn" id="exportBtn" title="Export backup">⇧</button></div>
+      <div>
+        <div class="eyebrow" id="todayLabel">YOUR TRAINING GROUND</div>
+        <div class="top-title" id="viewTitle">Dashboard</div>
+      </div>
+      <div class="top-actions">
+        <span class="date-chip" id="dateChip"></span>
+        <button class="icon-btn" id="importBtn" title="Import backup">⇩</button>
+        <button class="icon-btn" id="exportBtn" title="Export backup">⇧</button>
+      </div>
     </header>
     <section id="view" class="view"></section>
     <footer>IGRIS SYSTEM <span>•</span> Progress over perfection. Keep moving.</footer>
   </main>
 </div>
+
+<!-- Preview Modal for Uploaded Screenshots/PDFs -->
+<div class="modal" id="previewModal" onclick="if(event.target===this)closePreview()">
+  <div class="modal-box">
+    <div class="modal-head">
+      <b id="previewTitle">Attachment</b>
+      <button type="button" class="icon-btn" onclick="closePreview()">×</button>
+    </div>
+    <div id="previewBody" class="modal-body"></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept="application/json" hidden>
 <script src="app.js"></script>

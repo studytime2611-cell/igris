@@ -1,62 +1,537 @@
 const KEY='igris-neet-v1';
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
-const seed=()=>({tasks:[],chapters:{Physics:[],Chemistry:[],Biology:[]},sessions:[],mistakes:[],revisions:[],tests:[],settings:{name:'IGRIS'}});
-let db=load(), current='dashboard', missionTab='open', mistakeTab='open', trackTab='Physics', timerSeconds=25*60, timerRunning=false, timerInterval=null;
-function load(){try{return {...seed(),...JSON.parse(localStorage.getItem(KEY)||'{}')}}catch(e){return seed()}}
+const seed=()=>({
+  tasks:[],
+  chapters:{Physics:[],Chemistry:[],Biology:[]},
+  sessions:[],
+  mistakes:[],
+  revisions:[],
+  tests:[],
+  vault:[],
+  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k'}
+});
+
+let db=load(), current='dashboard', missionTab='open', mistakeTab='open', trackTab='Physics', strengthFilter='All', vaultFilter='All';
+let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null;
+
+function load(){
+  try{
+    const parsed=JSON.parse(localStorage.getItem(KEY)||'{}');
+    const base=seed();
+    return {...base,...parsed,settings:{...base.settings,...(parsed.settings||{})}};
+  }catch(e){return seed()}
+}
 function save(){localStorage.setItem(KEY,JSON.stringify(db));}
 function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function toast(s){let t=document.getElementById('toast');t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
+function toast(s){let t=document.getElementById('toast');t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2300)}
 function dateText(d=today()){return new Date(d+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})}
+
+/* IndexedDB Helper for Screenshots & PDFs */
+const IDB_NAME='igris-files-db', STORE_NAME='files';
+function openFilesDB(){
+  return new Promise((res,rej)=>{
+    const req=indexedDB.open(IDB_NAME,1);
+    req.onupgradeneeded=()=>req.result.createObjectStore(STORE_NAME,{keyPath:'id'});
+    req.onsuccess=()=>res(req.result);
+    req.onerror=()=>rej(req.error);
+  });
+}
+async function storeFile(file){
+  const id=crypto.randomUUID();
+  const dataUrl=await new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>res(r.result);
+    r.onerror=()=>rej(r.error);
+    r.readAsDataURL(file);
+  });
+  const idb=await openFilesDB();
+  await new Promise((res,rej)=>{
+    const tx=idb.transaction(STORE_NAME,'readwrite');
+    tx.objectStore(STORE_NAME).put({id,name:file.name,type:file.type,dataUrl});
+    tx.oncomplete=res;
+    tx.onerror=()=>rej(tx.error);
+  });
+  return {id,name:file.name,type:file.type};
+}
+async function getStoredFile(id){
+  const idb=await openFilesDB();
+  return new Promise((res,rej)=>{
+    const tx=idb.transaction(STORE_NAME,'readonly');
+    const req=tx.objectStore(STORE_NAME).get(id);
+    req.onsuccess=()=>res(req.result);
+    req.onerror=()=>rej(req.error);
+  });
+}
+async function deleteStoredFile(id){
+  if(!id)return;
+  const idb=await openFilesDB();
+  const tx=idb.transaction(STORE_NAME,'readwrite');
+  tx.objectStore(STORE_NAME).delete(id);
+}
+window.previewFile=async(fileId)=>{
+  const rec=await getStoredFile(fileId);
+  if(!rec){toast('File not found in local vault.');return}
+  document.getElementById('previewTitle').textContent=rec.name;
+  const body=document.getElementById('previewBody');
+  if(rec.type==='application/pdf'){
+    body.innerHTML=`<iframe src="${rec.dataUrl}"></iframe>`;
+  }else{
+    body.innerHTML=`<img src="${rec.dataUrl}" alt="${esc(rec.name)}">`;
+  }
+  document.getElementById('previewModal').classList.add('open');
+};
+window.closePreview=()=>{
+  document.getElementById('previewModal').classList.remove('open');
+  document.getElementById('previewBody').innerHTML='';
+};
+
 document.getElementById('dateChip').textContent=dateText();
 document.getElementById('menuBtn').onclick=()=>document.getElementById('sidebar').classList.toggle('open');
 document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
-function navigate(v){current=v;document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.view===v));document.getElementById('sidebar').classList.remove('open');render()}
+
+function navigate(v){
+  current=v;
+  document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
+  document.getElementById('sidebar').classList.remove('open');
+  render();
+}
 function title(s){document.getElementById('viewTitle').textContent=s}
 function stat(label,value,note){return `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${value}</div><div class="stat-note">${note}</div></div>`}
 function progress(label,done,total){let p=total?Math.round(done/total*100):0;return `<div class="progress-row"><div class="progress-meta"><span>${label}</span><span>${p}%</span></div><div class="bar"><span style="width:${p}%"></span></div></div>`}
 function todayTasks(){return db.tasks.filter(t=>t.date===today())}
 function totalMinutes(){return db.sessions.filter(s=>s.date===today()).reduce((a,s)=>a+s.minutes,0)}
 function examDate(){return db.settings.examDate||'2027-05-02'}
-function daysLeft(){const [y,m,d]=examDate().split('-').map(Number),t=new Date();return Math.round((new Date(y,m-1,d)-new Date(t.getFullYear(),t.getMonth(),t.getDate()))/864e5)}
-function countdown(){const n=daysLeft(),all=Object.values(db.chapters).flat(),total=all.length,left=all.filter(c=>!c.done).length,custom=!!db.settings.examDateSet;
-const big=n>0?n:(n===0?'Today':'Done'),sub=n>0?`${Math.floor(n/7)} weeks ${n%7} days`:(n===0?'Exam day. Give it everything.':'This date has passed. Set a new one.');
-const dt=new Date(examDate()+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-const pace=n>30&&total?`<div class="cd-note">Chapters left: <b>${left}</b> of ${total}. To finish 30 days before the exam, aim for about <b>${(left/Math.max(Math.floor((n-30)/7),1)).toFixed(1)}</b> chapters per week.</div>`:'';
-return `<div class="card countdown"><div><div class="eyebrow">NEET 2027 COUNTDOWN</div><div class="cd-num">${big}${n>0?'<span> days left</span>':''}</div><div class="muted" style="font-size:11px;margin-top:6px">${sub} • ${custom?'Your date':'Tentative'}: ${dt}</div>${pace}</div><div class="cd-set"><label class="eyebrow" for="examDateInput">EXAM DATE</label><div class="actions" style="margin-top:6px"><input type="date" id="examDateInput" value="${examDate()}" style="width:auto"><button type="button" class="btn secondary" onclick="setExamDate()">Save</button></div><div class="muted" style="font-size:9px;margin-top:6px">NTA has not announced the date yet. Update it after the bulletin.</div></div></div>`}
-window.setExamDate=()=>{const v=document.getElementById('examDateInput').value;if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){toast('Pick a valid date.');return}db.settings.examDate=v;db.settings.examDateSet=true;save();render();toast('Exam date saved.')};
-function dashboard(){title('Dashboard');let tasks=todayTasks(),done=tasks.filter(t=>t.done).length,mins=totalMinutes(),tests=db.tests.length;
-return `<div class="hero"><div class="hero-row"><div><div class="eyebrow">SYSTEM INITIALIZED • NEET 2027</div><h1>Welcome back, 𓆩⚔️𓆪 IGRIS 💙</h1><p>Your mission is not to be perfect. Your mission is to show up, learn from errors, and make the next attempt better.</p></div><div class="rank"><small>CURRENT RANK</small><b>HUNTER</b></div></div></div>
-${countdown()}
-<div class="stats">${stat('MISSIONS COMPLETED',`${done}/${tasks.length}`,'Today’s task progress')}${stat('FOCUS TIME',`${Math.floor(mins/60)}h ${mins%60}m`,'Logged today')}${stat('MISTAKES TRACKED',db.mistakes.length,'Learning opportunities')}${stat('MOCK TESTS',tests,'Tests recorded')}</div>
-<div class="two-col"><div><div class="section-head"><h2>Today's Missions</h2><small>${dateText()}</small></div><div class="card">${tasks.length?tasks.map(taskHTML).join(''):'<div class="empty">No missions added yet. Create your first daily target.</div>'}<div class="actions" style="margin-top:12px"><button class="btn" onclick="navigate('missions')">Manage missions</button></div></div>
-<div class="section-head"><h2>Focus — last 7 days</h2><small>MINUTES</small></div><div class="card">${barChart(dayKeys(7).map(dayLabel),dayKeys(7).map(k=>db.sessions.filter(x=>x.date===k).reduce((a,x)=>a+x.minutes,0)),'bar-focus')}</div>
-<div class="section-head"><h2>Subject Progress</h2><small>CHAPTERS MARKED COMPLETE</small></div><div class="card">${['Physics','Chemistry','Biology'].map(s=>progress(s,db.chapters[s].filter(c=>c.done).length,db.chapters[s].length)).join('')||'No chapters yet'}</div></div>
-<div><div class="section-head"><h2>Quick Actions</h2><small>COMMAND SHORTCUTS</small></div><div class="card"><div class="actions"><button class="btn" onclick="navigate('missions')">＋ Add mission</button><button class="btn secondary" onclick="navigate('focus')">Start focus</button><button class="btn secondary" onclick="navigate('mistakes')">Log a mistake</button><button class="btn secondary" onclick="navigate('tests')">Add mock test</button></div></div>
-<div class="section-head"><h2>Recent Activity</h2><small>LATEST RECORDS</small></div><div class="card">${recentActivity()}</div></div></div>`}
+
+function getCountdownParts(){
+  const [y,m,d]=examDate().split('-').map(Number);
+  const target=new Date(y,m-1,d,9,0,0);
+  const diff=Math.max(0,target-new Date());
+  const days=Math.floor(diff/864e5);
+  const hrs=Math.floor((diff%864e5)/36e5);
+  const mins=Math.floor((diff%36e5)/6e4);
+  const secs=Math.floor((diff%6e4)/1e3);
+  return {diff,days,hrs,mins,secs};
+}
+function pad2(n){return String(n).padStart(2,'0')}
+
+function countdown(){
+  const {days,hrs,mins,secs}=getCountdownParts();
+  const all=Object.values(db.chapters).flat(),total=all.length,left=all.filter(c=>!c.done).length,custom=!!db.settings.examDateSet;
+  const dt=new Date(examDate()+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+  const pace=days>30&&total?`<div class="cd-note">Chapters left: <b>${left}</b> of ${total}. Aim for about <b>${(left/Math.max(Math.floor((days-30)/7),1)).toFixed(1)}</b> chapters/week to finish 30 days early.</div>`:'';
+  return `<div class="card countdown">
+    <div>
+      <div class="eyebrow">NEET 2027 LIVE COUNTDOWN • ${custom?'YOUR DATE':'TENTATIVE'}: ${dt}</div>
+      <div class="flip-group">
+        <div class="flip-unit"><div class="flip-val" id="cdDays">${pad2(days)}</div><div class="flip-lbl">DAYS</div></div>
+        <div class="flip-unit"><div class="flip-val" id="cdHrs">${pad2(hrs)}</div><div class="flip-lbl">HRS</div></div>
+        <div class="flip-unit"><div class="flip-val" id="cdMins">${pad2(mins)}</div><div class="flip-lbl">MINS</div></div>
+        <div class="flip-unit"><div class="flip-val" id="cdSecs">${pad2(secs)}</div><div class="flip-lbl">SECS</div></div>
+      </div>
+      ${pace}
+    </div>
+    <div class="cd-set">
+      <label class="eyebrow" for="examDateInput">EXAM DATE</label>
+      <div class="actions" style="margin-top:6px">
+        <input type="date" id="examDateInput" value="${examDate()}" style="width:auto">
+        <button type="button" class="btn secondary" onclick="setExamDate()">Save</button>
+      </div>
+      <div class="muted" style="font-size:9px;margin-top:6px">Update once NTA releases the official bulletin.</div>
+    </div>
+  </div>`;
+}
+
+function startLiveCountdown(){
+  clearInterval(clockInterval);
+  clockInterval=setInterval(()=>{
+    const elD=document.getElementById('cdDays');
+    if(!elD)return;
+    const {days,hrs,mins,secs}=getCountdownParts();
+    elD.textContent=pad2(days);
+    document.getElementById('cdHrs').textContent=pad2(hrs);
+    document.getElementById('cdMins').textContent=pad2(mins);
+    document.getElementById('cdSecs').textContent=pad2(secs);
+  },1000);
+}
+
+window.setExamDate=()=>{
+  const v=document.getElementById('examDateInput').value;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){toast('Pick a valid date.');return}
+  db.settings.examDate=v;db.settings.examDateSet=true;save();render();toast('Exam date saved.');
+};
+
+window.editRanks=()=>{
+  const cur=prompt('Enter your Current Rank (e.g. 4 Lakh, 1.2 Lakh):',db.settings.currentRank||'4 Lakh');
+  if(cur===null)return;
+  const up=prompt('Enter your Upcoming Target Rank (e.g. 10k, 5k, AIR 500):',db.settings.upcomingRank||'10k');
+  if(up===null)return;
+  db.settings.currentRank=cur.trim()||'4 Lakh';
+  db.settings.upcomingRank=up.trim()||'10k';
+  save();render();toast('Rank targets updated.');
+};
+
+function dashboard(){
+  title('Dashboard');
+  let tasks=todayTasks(),done=tasks.filter(t=>t.done).length,mins=totalMinutes(),tests=db.tests.length;
+  const curRank=esc(db.settings.currentRank||'4 Lakh'), upRank=esc(db.settings.upcomingRank||'10k');
+  return `<div class="hero">
+    <div class="hero-row">
+      <div>
+        <div class="eyebrow">SYSTEM INITIALIZED • NEET 2027</div>
+        <h1>Welcome back, 𓆩⚔️𓆪 IGRIS 💙</h1>
+        <p>Your mission is not to be perfect. Your mission is to show up, learn from errors, and make the next attempt better.</p>
+      </div>
+      <div class="rank-box">
+        <div class="rank">
+          <button type="button" class="rank-edit" title="Edit Ranks" onclick="editRanks()">✎</button>
+          <small>CURRENT RANK</small>
+          <b>${curRank}</b>
+        </div>
+        <div class="rank upcoming">
+          <button type="button" class="rank-edit" title="Edit Ranks" onclick="editRanks()">✎</button>
+          <small>UPCOMING RANK</small>
+          <b>${upRank}</b>
+        </div>
+      </div>
+    </div>
+  </div>
+  ${countdown()}
+  <div class="stats">
+    ${stat('MISSIONS COMPLETED',`${done}/${tasks.length}`,'Today’s task progress')}
+    ${stat('FOCUS TIME',`${Math.floor(mins/60)}h ${mins%60}m`,'Logged today')}
+    ${stat('MISTAKES TRACKED',db.mistakes.length,'Learning opportunities')}
+    ${stat('MOCK TESTS',tests,'Tests recorded')}
+  </div>
+  <div class="two-col">
+    <div>
+      <div class="section-head"><h2>Today's Missions</h2><small>${dateText()}</small></div>
+      <div class="card">
+        ${tasks.length?tasks.map(taskHTML).join(''):'<div class="empty">No missions added yet. Create your first daily target.</div>'}
+        <div class="actions" style="margin-top:12px"><button class="btn" onclick="navigate('missions')">Manage missions</button></div>
+      </div>
+      <div class="section-head"><h2>Focus — last 7 days</h2><small>MINUTES</small></div>
+      <div class="card">${barChart(dayKeys(7).map(dayLabel),dayKeys(7).map(k=>db.sessions.filter(x=>x.date===k).reduce((a,x)=>a+x.minutes,0)),'bar-focus')}</div>
+      <div class="section-head"><h2>Subject Progress</h2><small>CHAPTERS MARKED COMPLETE</small></div>
+      <div class="card">${['Physics','Chemistry','Biology'].map(s=>progress(s,db.chapters[s].filter(c=>c.done).length,db.chapters[s].length)).join('')||'No chapters yet'}</div>
+    </div>
+    <div>
+      <div class="section-head"><h2>Quick Actions</h2><small>COMMAND SHORTCUTS</small></div>
+      <div class="card">
+        <div class="actions">
+          <button class="btn" onclick="navigate('missions')">＋ Add mission</button>
+          <button class="btn secondary" onclick="navigate('focus')">Start focus</button>
+          <button class="btn secondary" onclick="navigate('mistakes')">Log a mistake</button>
+          <button class="btn secondary" onclick="navigate('vault')">📂 Study Vault</button>
+        </div>
+      </div>
+      <div class="section-head"><h2>Recent Activity</h2><small>LATEST RECORDS</small></div>
+      <div class="card">${recentActivity()}</div>
+    </div>
+  </div>`;
+}
+
 function taskHTML(t){const old=!t.done&&t.date<today()?`<span class="tag gold">${dateText(t.date)}</span>`:'';return `<label class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span>${old}<small>${esc(t.subject||'GENERAL')}</small><button class="icon-btn" style="padding:3px 7px" onclick="deleteTask('${t.id}')">×</button></label>`}
 function recentActivity(){let items=[...db.sessions.map(x=>({date:x.date,text:`Focus session • ${x.subject} • ${x.minutes} min`})),...db.tests.map(x=>({date:x.date,text:`Mock test • ${x.name} • ${x.score} marks`})),...allRevs().slice(0,5).map(x=>({date:x.date,text:`Revision • ${x.chapter} (${x.kind})`}))].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);return items.length?items.map(x=>`<div class="list-item"><span>${esc(x.text)}</span><span class="muted">${x.date}</span></div>`).join(''):'<div class="empty">Your activity will appear here as you use IGRIS.</div>'}
 function tabsHTML(cur,open,closed,fn){return `<div class="tabs"><button type="button" class="tab ${cur==='open'?'active':''}" onclick="${fn}('open')">Open <b>${open}</b></button><button type="button" class="tab ${cur==='closed'?'active':''}" onclick="${fn}('closed')">Closed <b>${closed}</b></button></div>`}
-function missions(){title('Daily Missions');
-const open=db.tasks.filter(t=>!t.done).sort((a,b)=>a.date.localeCompare(b.date)),closed=db.tasks.filter(t=>t.done).sort((a,b)=>(b.doneAt||b.date).localeCompare(a.doneAt||a.date)),tt=todayTasks(),td=tt.filter(t=>t.done).length,list=missionTab==='open'?open:closed;
-const empty=missionTab==='open'?'No open missions. Add a task to begin.':'No closed missions yet. Complete one to see it here.';
-return `<div class="section-head"><h2>Mission Board</h2><small>${dateText()} • ${td}/${tt.length} TODAY</small></div><div class="two-col"><div class="card"><h3>Your missions</h3>${tabsHTML(missionTab,open.length,closed.length,'setMissionTab')}${list.length?list.map(taskHTML).join(''):`<div class="empty">${empty}</div>`}<div style="margin-top:12px">${progress('TODAY’S COMPLETION',td,tt.length)}</div></div><div class="card"><h3>Deploy a new mission</h3><form id="taskForm"><div class="field"><label>TASK DESCRIPTION</label><input name="text" placeholder="e.g. Revise NLM notes + 30 MCQs" required></div><div class="field"><label>SUBJECT</label><select name="subject"><option>General</option><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div><button class="btn">＋ Add mission</button></form><p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open missions carry over until you close them. Tasks are saved in this browser, so export a backup regularly.</p></div></div>`}
+
+function missions(){
+  title('Daily Missions');
+  const open=db.tasks.filter(t=>!t.done).sort((a,b)=>a.date.localeCompare(b.date)),closed=db.tasks.filter(t=>t.done).sort((a,b)=>(b.doneAt||b.date).localeCompare(a.doneAt||a.date)),tt=todayTasks(),td=tt.filter(t=>t.done).length,list=missionTab==='open'?open:closed;
+  const empty=missionTab==='open'?'No open missions. Add a task to begin.':'No closed missions yet. Complete one to see it here.';
+  return `<div class="section-head"><h2>Mission Board</h2><small>${dateText()} • ${td}/${tt.length} TODAY</small></div>
+  <div class="two-col">
+    <div class="card"><h3>Your missions</h3>${tabsHTML(missionTab,open.length,closed.length,'setMissionTab')}${list.length?list.map(taskHTML).join(''):`<div class="empty">${empty}</div>`}<div style="margin-top:12px">${progress('TODAY’S COMPLETION',td,tt.length)}</div></div>
+    <div class="card"><h3>Deploy a new mission</h3>
+      <form id="taskForm">
+        <div class="field"><label>TASK DESCRIPTION</label><input name="text" placeholder="e.g. Revise NLM notes + 30 MCQs" required></div>
+        <div class="field"><label>SUBJECT</label><select name="subject"><option>General</option><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
+        <button class="btn">＋ Add mission</button>
+      </form>
+      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open missions carry over until you close them.</p>
+    </div>
+  </div>`;
+}
+
 function branchOf(c){if(c.branch)return c.branch;const i=NEET_SYLLABUS.Chemistry.findIndex(n=>n.toLowerCase()===c.name.trim().toLowerCase());return i<0||i<8?'Physical':i<12?'Inorganic':'Organic'}
 function tabChapters(cfg){return(db.chapters[cfg.sub]||[]).filter(c=>!cfg.branch||branchOf(c)===cfg.branch)}
 function shortDate(d){return new Date(d+'T12:00:00').toLocaleDateString('en-IN',{day:'numeric',month:'short'})}
 function trackCols(cfg){return[['done','Done',0],...cfg.cols.map(([k,l])=>[k,l,0]),...Array.from({length:cfg.rev},(_,i)=>['r'+(i+1),'Rev '+(i+1),1])]}
-function subjects(){title('Subject HQ');const cfg=TRACK[trackTab],cols=trackCols(cfg),list=tabChapters(cfg),doneN=list.filter(c=>c.done).length;
-const cnt=k=>list.filter(c=>k==='done'?c.done:(c.t||{})[k]).length;
-return `<div class="section-head"><h2>Chapter Tracker</h2><div class="actions" style="align-items:center"><small>TICK AS YOU GO • REVISIONS SHOW DATES</small><button type="button" class="btn secondary" style="padding:7px 10px" onclick="loadSyllabus()">⬇ Load NEET chapters</button></div></div>
-<div class="tabs tracktabs">${TRACK_ORDER.map(k=>`<button type="button" class="tab ${trackTab===k?'active':''}" onclick="setTrackTab('${k}')">${TRACK[k].label}<b>${tabChapters(TRACK[k]).length}</b></button>`).join('')}</div>
-<div class="card" style="padding:12px 17px;margin-bottom:12px">${progress(cfg.label.toUpperCase()+' • CHAPTERS DONE',doneN,list.length)}</div>
-${list.length?`<div class="track-wrap"><table class="track"><thead><tr><th>CHAPTER</th>${cols.map(([k,l,r])=>`<th class="${r?'rv':''}">${l}<small>${cnt(k)}/${list.length}</small></th>`).join('')}<th></th></tr></thead><tbody>${list.map(c=>`<tr><td><div class="cn-wrap"><span class="cn">${esc(c.name)}</span></div></td>${cols.map(([k,l,r])=>{const v=k==='done'?(c.done?'1':''):((c.t||{})[k]||'');return`<td><button type="button" class="cell ${r?'rev':''} ${v?'on':''}" aria-label="${esc(l)}" onclick="toggleCell('${c.id}','${k}')">✓</button>${r?`<span class="cdate">${v&&v!=='1'?shortDate(v):''}</span>`:''}</td>`}).join('')}<td><button type="button" class="icon-btn" style="padding:2px 6px" title="Delete chapter" onclick="deleteChapter('${cfg.sub}','${c.id}')">×</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="card"><div class="empty">No chapters here yet. Add one below or tap “Load NEET chapters”.</div></div>'}
-<form class="card addrow" onsubmit="addTrackChapter(event)" style="margin-top:12px"><div class="field" style="flex:1;margin:0"><label>ADD CHAPTER TO ${cfg.label.toUpperCase()}</label><input name="chapter" placeholder="Chapter name" required></div><button class="btn secondary">＋ Add</button></form>
-<p class="muted" style="font-size:10px;margin-top:15px;line-height:1.7">Tap a box to tick it, tap again to untick. Revision boxes remember the date you ticked them.</p>`}
-function focus(){title('Focus Room');return `<div class="section-head"><h2>Deep Work Protocol</h2><small>FOCUS • LOG • REPEAT</small></div><div class="two-col"><div class="card timer-wrap"><div class="timer-state" id="timerState">READY WHEN YOU ARE</div><div class="timer" id="timerDisplay">${fmt(timerSeconds)}</div><div class="actions" style="justify-content:center;margin-bottom:20px"><button class="btn" id="startTimer">${timerRunning?'Pause':'Start focus'}</button><button class="btn secondary" id="resetTimer">Reset</button></div><div class="actions" style="justify-content:center"><button class="btn ghost" onclick="setTimer(25)">25 min</button><button class="btn ghost" onclick="setTimer(50)">50 min</button><button class="btn ghost" onclick="setTimer(60)">60 min</button></div><p class="muted" style="font-size:10px">Timer runs while this page stays open. Log completed sessions below.</p></div><div class="card"><h3>Log a study session</h3><form id="sessionForm"><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option><option>Revision</option></select></div><div class="field"><label>DURATION (MINUTES)</label><input name="minutes" type="number" min="1" max="1440" value="50" required></div></div><div class="field"><label>WHAT DID YOU WORK ON?</label><input name="topic" placeholder="e.g. Electrostatics numericals"></div><button class="btn">Save session</button></form><div class="section-head"><h2>Today's sessions</h2><small>${totalMinutes()} MIN TOTAL</small></div>${db.sessions.filter(s=>s.date===today()).map(s=>`<div class="list-item"><span>${esc(s.subject)} — ${esc(s.topic||'Study session')}</span><b>${s.minutes}m</b></div>`).join('')||'<div class="empty">No sessions logged today.</div>'}</div></div>`}
-function fmt(n){return `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`}
-function setTimer(m){clearInterval(timerInterval);timerRunning=false;timerSeconds=m*60;render()}
-function startTimer(){timerRunning=!timerRunning;if(timerRunning){timerInterval=setInterval(()=>{timerSeconds--;let el=document.getElementById('timerDisplay');if(el)el.textContent=fmt(timerSeconds);if(timerSeconds<=0){clearInterval(timerInterval);timerRunning=false;toast('Focus session complete. Take a short break.');let st=document.getElementById('timerState');if(st)st.textContent='SESSION COMPLETE'}} ,1000)}else clearInterval(timerInterval);let b=document.getElementById('startTimer');if(b)b.textContent=timerRunning?'Pause':'Resume'}
-function mistakes(){title('Mistake Hunter');const mo=db.mistakes.filter(x=>!x.closed),mc=db.mistakes.filter(x=>x.closed),ml=mistakeTab==='open'?mo:mc;return `<div class="section-head"><h2>Turn errors into insight</h2><small>${db.mistakes.length} RECORDS</small></div><div class="two-col"><div class="card"><h3>Record a mistake</h3><form id="mistakeForm"><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div><div class="field"><label>ERROR TYPE</label><select name="type"><option>Concept gap</option><option>Calculation</option><option>Formula recall</option><option>Misread question</option><option>Memory / NCERT</option><option>Time management</option></select></div></div><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="Chapter name"></div><div class="field"><label>WHAT WENT WRONG?</label><textarea name="error" required placeholder="Describe the error briefly..."></textarea></div><div class="field"><label>CORRECT APPROACH / TAKEAWAY</label><textarea name="fix" placeholder="What will you remember next time?"></textarea></div><button class="btn">＋ Save mistake</button></form></div><div class="card"><h3>Learning log</h3>${tabsHTML(mistakeTab,mo.length,mc.length,'setMistakeTab')}${ml.length?ml.slice().reverse().map(m=>`<div class="list-item" style="align-items:flex-start"><div><b>${esc(m.chapter)}</b><div class="muted" style="margin:4px 0">${esc(m.subject)} • ${esc(m.type)} • ${m.date}</div><div>${esc(m.error)}</div>${m.fix?`<div style="color:#8bd5aa;margin-top:5px">Takeaway: ${esc(m.fix)}</div>`:''}<div style="margin-top:8px"><button class="btn ${m.closed?'ghost':'secondary'}" style="padding:6px 10px" onclick="toggleMistake('${m.id}')">${m.closed?'↺ Reopen':'✓ Mark fixed'}</button></div></div><button class="icon-btn" onclick="removeItem('mistakes','${m.id}')">×</button></div>`).join(''):`<div class="empty">${mistakeTab==='open'?'No open mistakes. Add one after your next practice session.':'Nothing closed yet. Mark a mistake as fixed once you have mastered it.'}</div>`}</div></div>`}
+
+window.setStrengthFilter=f=>{strengthFilter=f;render()};
+window.updateChapterStrength=(sub,id,val)=>{
+  const c=(db.chapters[sub]||[]).find(x=>x.id===id);
+  if(c){c.strength=val;save();keepScroll(render);toast(`Marked as ${val}`)}
+};
+window.updateWeakTopics=(sub,id,val)=>{
+  const c=(db.chapters[sub]||[]).find(x=>x.id===id);
+  if(c){c.weakTopics=val.trim();save()}
+};
+
+function subjects(){
+  title('Subject HQ');
+  const cfg=TRACK[trackTab],cols=trackCols(cfg),allList=tabChapters(cfg),doneN=allList.filter(c=>c.done).length;
+  const list=strengthFilter==='All'?allList:allList.filter(c=>(c.strength||'Medium')===strengthFilter);
+  const cnt=k=>allList.filter(c=>k==='done'?c.done:(c.t||{})[k]).length;
+  const weakCount=allList.filter(c=>c.strength==='Weak').length;
+
+  return `<div class="section-head">
+    <h2>Chapter Tracker & Strength Matrix</h2>
+    <div class="actions" style="align-items:center">
+      <select class="str-select" style="background:#14141d;color:#ddd" onchange="setStrengthFilter(this.value)">
+        <option value="All" ${strengthFilter==='All'?'selected':''}>All Levels (${allList.length})</option>
+        <option value="Weak" ${strengthFilter==='Weak'?'selected':''}>🔴 Weak (${weakCount})</option>
+        <option value="Medium" ${strengthFilter==='Medium'?'selected':''}>🟡 Medium (${allList.filter(c=>(c.strength||'Medium')==='Medium').length})</option>
+        <option value="Strong" ${strengthFilter==='Strong'?'selected':''}>🟢 Strong (${allList.filter(c=>c.strength==='Strong').length})</option>
+      </select>
+      <button type="button" class="btn secondary" style="padding:7px 10px" onclick="loadSyllabus()">⬇ Load NEET chapters</button>
+    </div>
+  </div>
+  <div class="tabs tracktabs">${TRACK_ORDER.map(k=>`<button type="button" class="tab ${trackTab===k?'active':''}" onclick="setTrackTab('${k}')">${TRACK[k].label}<b>${tabChapters(TRACK[k]).length}</b></button>`).join('')}</div>
+  <div class="card" style="padding:12px 17px;margin-bottom:12px">${progress(cfg.label.toUpperCase()+' • CHAPTERS DONE',doneN,allList.length)}</div>
+  ${list.length?`<div class="track-wrap"><table class="track">
+    <thead>
+      <tr>
+        <th>CHAPTER</th>
+        <th>LEVEL</th>
+        <th>WEAK TOPICS</th>
+        ${cols.map(([k,l,r])=>`<th class="${r?'rv':''}">${l}<small>${cnt(k)}/${allList.length}</small></th>`).join('')}
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      ${list.map(c=>{
+        const st=c.strength||'Medium';
+        return `<tr>
+          <td><div class="cn-wrap"><span class="cn">${esc(c.name)}</span></div></td>
+          <td>
+            <select class="str-select str-${st}" onchange="updateChapterStrength('${cfg.sub}','${c.id}',this.value)">
+              <option value="Weak" ${st==='Weak'?'selected':''}>Weak</option>
+              <option value="Medium" ${st==='Medium'?'selected':''}>Medium</option>
+              <option value="Strong" ${st==='Strong'?'selected':''}>Strong</option>
+            </select>
+          </td>
+          <td>
+            <input type="text" class="weak-input" value="${esc(c.weakTopics||'')}" placeholder="Write weak subtopics..." onchange="updateWeakTopics('${cfg.sub}','${c.id}',this.value)">
+          </td>
+          ${cols.map(([k,l,r])=>{
+            const v=k==='done'?(c.done?'1':''):((c.t||{})[k]||'');
+            return`<td><button type="button" class="cell ${r?'rev':''} ${v?'on':''}" aria-label="${esc(l)}" onclick="toggleCell('${c.id}','${k}')">✓</button>${r?`<span class="cdate">${v&&v!=='1'?shortDate(v):''}</span>`:''}</td>`
+          }).join('')}
+          <td><button type="button" class="icon-btn" style="padding:2px 6px" title="Delete chapter" onclick="deleteChapter('${cfg.sub}','${c.id}')">×</button></td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table></div>`:'<div class="card"><div class="empty">No chapters match this filter.</div></div>'}
+  <form class="card addrow" onsubmit="addTrackChapter(event)" style="margin-top:12px">
+    <div class="field" style="flex:1;margin:0"><label>ADD CHAPTER TO ${cfg.label.toUpperCase()}</label><input name="chapter" placeholder="Chapter name" required></div>
+    <button class="btn secondary">＋ Add</button>
+  </form>`;
+}
+
+/* Focus Room with Flip Clock, Custom Time, and Clean Save Logic */
+function timerParts(sec){
+  const h=Math.floor(sec/3600);
+  const m=Math.floor((sec%3600)/60);
+  const s=sec%60;
+  return {h:pad2(h),m:pad2(m),s:pad2(s)};
+}
+
+function focus(){
+  title('Focus Room');
+  const {h,m,s}=timerParts(timerSeconds);
+  return `<div class="section-head"><h2>Deep Work Protocol</h2><small>FLIP TIMER • CUSTOM DURATION • CLEAN LOG</small></div>
+  <div class="two-col">
+    <div class="card timer-wrap">
+      <div class="timer-state" id="timerState">${timerRunning?'FOCUS SESSION ACTIVE':'READY WHEN YOU ARE'}</div>
+      <div class="timer-flip-wrap">
+        <div class="timer-flip-unit"><div class="timer-flip-val" id="tHrs">${h}</div><div class="timer-flip-lbl">HRS</div></div>
+        <div class="timer-colon">:</div>
+        <div class="timer-flip-unit"><div class="timer-flip-val" id="tMins">${m}</div><div class="timer-flip-lbl">MINS</div></div>
+        <div class="timer-colon">:</div>
+        <div class="timer-flip-unit"><div class="timer-flip-val" id="tSecs">${s}</div><div class="timer-flip-lbl">SECS</div></div>
+      </div>
+      <div class="actions" style="justify-content:center;margin-bottom:14px">
+        <button type="button" class="btn" id="startTimer">${timerRunning?'Pause':'Start focus'}</button>
+        <button type="button" class="btn secondary" id="resetTimer">Reset</button>
+      </div>
+      <div class="actions" style="justify-content:center">
+        <button type="button" class="btn ghost" onclick="setTimer(25)">25 min</button>
+        <button type="button" class="btn ghost" onclick="setTimer(50)">50 min</button>
+        <button type="button" class="btn ghost" onclick="setTimer(90)">90 min</button>
+        <button type="button" class="btn ghost" onclick="setTimer(180)">3 hrs (Mock)</button>
+      </div>
+      <div class="custom-time-row">
+        <input type="number" id="customMinInput" min="1" max="720" placeholder="Custom mins">
+        <button type="button" class="btn secondary" onclick="applyCustomTimer()">Set</button>
+      </div>
+      <p class="muted" style="font-size:10px;margin-top:10px">Sessions are only saved when a timer finishes OR when you manually click "Save session" on the right.</p>
+    </div>
+    <div class="card">
+      <h3>Log a completed study session</h3>
+      <form id="sessionForm">
+        <div class="form-grid">
+          <div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option><option>Revision</option></select></div>
+          <div class="field"><label>DURATION (MINUTES)</label><input name="minutes" type="number" min="1" max="1440" placeholder="e.g. 50" required></div>
+        </div>
+        <div class="field"><label>WHAT DID YOU WORK ON?</label><input name="topic" placeholder="e.g. Electrostatics numericals"></div>
+        <button type="submit" class="btn">Save session</button>
+      </form>
+      <div class="section-head"><h2>Today's sessions</h2><small>${totalMinutes()} MIN TOTAL</small></div>
+      ${db.sessions.filter(s=>s.date===today()).map(s=>`<div class="list-item"><span>${esc(s.subject)} — ${esc(s.topic||'Study session')}</span><div style="display:flex;align-items:center;gap:8px"><b>${s.minutes}m</b><button type="button" class="icon-btn" style="padding:2px 6px" onclick="removeItem('sessions','${s.id}')">×</button></div></div>`).join('')||'<div class="empty">No sessions logged today.</div>'}
+    </div>
+  </div>`;
+}
+
+function updateTimerDOM(){
+  const {h,m,s}=timerParts(timerSeconds);
+  const eh=document.getElementById('tHrs'),em=document.getElementById('tMins'),es=document.getElementById('tSecs');
+  if(eh)eh.textContent=h;
+  if(em)em.textContent=m;
+  if(es)es.textContent=s;
+}
+window.setTimer=m=>{
+  clearInterval(timerInterval);
+  timerRunning=false;
+  timerInitial=m*60;
+  timerSeconds=m*60;
+  render();
+};
+window.applyCustomTimer=()=>{
+  const v=parseInt(document.getElementById('customMinInput').value,10);
+  if(!v||v<1||v>720){toast('Enter valid minutes (1–720).');return}
+  setTimer(v);
+  toast(`Timer set to ${v} mins.`);
+};
+function startTimer(){
+  timerRunning=!timerRunning;
+  const st=document.getElementById('timerState');
+  if(timerRunning){
+    if(st)st.textContent='FOCUS SESSION ACTIVE';
+    timerInterval=setInterval(()=>{
+      timerSeconds--;
+      updateTimerDOM();
+      if(timerSeconds<=0){
+        clearInterval(timerInterval);
+        timerRunning=false;
+        const completedMins=Math.max(1,Math.round(timerInitial/60));
+        db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,topic:'Completed flip timer session'});
+        save();
+        toast(`Focus complete! ${completedMins} min session logged.`);
+        render();
+      }
+    },1000);
+  }else{
+    clearInterval(timerInterval);
+    if(st)st.textContent='PAUSED';
+  }
+  let b=document.getElementById('startTimer');
+  if(b)b.textContent=timerRunning?'Pause':'Resume';
+}
+
+/* Mistake Hunter with Image/PDF Attachment */
+function mistakes(){
+  title('Mistake Hunter');
+  const mo=db.mistakes.filter(x=>!x.closed),mc=db.mistakes.filter(x=>x.closed),ml=mistakeTab==='open'?mo:mc;
+  return `<div class="section-head"><h2>Turn errors into insight</h2><small>${db.mistakes.length} RECORDS</small></div>
+  <div class="two-col">
+    <div class="card">
+      <h3>Record a mistake</h3>
+      <form id="mistakeForm">
+        <div class="form-grid">
+          <div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
+          <div class="field"><label>ERROR TYPE</label><select name="type"><option>Concept gap</option><option>Calculation</option><option>Formula recall</option><option>Misread question</option><option>Memory / NCERT</option><option>Time management</option></select></div>
+        </div>
+        <div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="Chapter name"></div>
+        <div class="field"><label>WHAT WENT WRONG?</label><textarea name="error" required placeholder="Describe the error briefly..."></textarea></div>
+        <div class="field"><label>CORRECT APPROACH / TAKEAWAY</label><textarea name="fix" placeholder="What will you remember next time?"></textarea></div>
+        <div class="field"><label>ATTACH QUESTION SCREENSHOT / PDF (OPTIONAL)</label><input type="file" name="attachment" accept="image/*,application/pdf"></div>
+        <button type="submit" class="btn">＋ Save mistake</button>
+      </form>
+    </div>
+    <div class="card">
+      <h3>Learning log</h3>
+      ${tabsHTML(mistakeTab,mo.length,mc.length,'setMistakeTab')}
+      ${ml.length?ml.slice().reverse().map(m=>`
+        <div class="list-item" style="align-items:flex-start">
+          <div>
+            <b>${esc(m.chapter)}</b>
+            <div class="muted" style="margin:4px 0">${esc(m.subject)} • ${esc(m.type)} • ${m.date}</div>
+            <div>${esc(m.error)}</div>
+            ${m.fix?`<div style="color:#8bd5aa;margin-top:5px">Takeaway: ${esc(m.fix)}</div>`:''}
+            <div class="actions" style="margin-top:8px">
+              <button type="button" class="btn ${m.closed?'ghost':'secondary'}" style="padding:6px 10px" onclick="toggleMistake('${m.id}')">${m.closed?'↺ Reopen':'✓ Mark fixed'}</button>
+              ${m.fileId?`<button type="button" class="btn ghost" style="padding:6px 10px" onclick="previewFile('${m.fileId}')">📎 View ${m.fileType==='application/pdf'?'PDF':'Screenshot'}</button>`:''}
+            </div>
+          </div>
+          <button type="button" class="icon-btn" onclick="deleteMistake('${m.id}')">×</button>
+        </div>
+      `).join(''):`<div class="empty">${mistakeTab==='open'?'No open mistakes. Add one after your next practice session.':'Nothing closed yet.'}</div>`}
+    </div>
+  </div>`;
+}
+
+window.deleteMistake=async(id)=>{
+  const m=db.mistakes.find(x=>x.id===id);
+  if(m&&m.fileId)await deleteStoredFile(m.fileId);
+  db.mistakes=db.mistakes.filter(x=>x.id!==id);
+  save();render();toast('Mistake removed.');
+};
+
+/* New Study Vault Sidebar View for NEET Material, Screenshots & PDFs */
+window.setVaultFilter=f=>{vaultFilter=f;render()};
+window.deleteVaultItem=async(id)=>{
+  const item=(db.vault||[]).find(x=>x.id===id);
+  if(item&&item.fileId)await deleteStoredFile(item.fileId);
+  db.vault=(db.vault||[]).filter(x=>x.id!==id);
+  save();render();toast('File removed from Study Vault.');
+};
+
+function vault(){
+  title('Study Vault');
+  const items=(db.vault||[]).filter(v=>vaultFilter==='All'||v.subject===vaultFilter);
+  return `<div class="section-head">
+    <h2>NEET Material, Screenshots & PDFs</h2>
+    <div class="actions">
+      ${['All','Physics','Chemistry','Biology','Formula / Notes'].map(f=>`<button type="button" class="btn ${vaultFilter===f?'':'secondary'}" style="padding:6px 10px" onclick="setVaultFilter('${f}')">${f}</button>`).join('')}
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="card">
+      <h3>Upload Study Material</h3>
+      <form id="vaultForm">
+        <div class="field"><label>TITLE / TOPIC NAME</label><input name="title" required placeholder="e.g. Organic Named Reactions Mindmap"></div>
+        <div class="form-grid">
+          <div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option><option>Formula / Notes</option></select></div>
+          <div class="field"><label>CATEGORY</label><select name="category"><option>Screenshot / Diagram</option><option>Short Notes PDF</option><option>DPP / Question Bank</option><option>NCERT Highlight</option></select></div>
+        </div>
+        <div class="field"><label>SELECT IMAGE OR PDF</label><input type="file" name="file" accept="image/*,application/pdf" required></div>
+        <button type="submit" class="btn">⬆ Save to Study Vault</button>
+      </form>
+      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:14px">Files are stored offline inside your browser's IndexedDB so large PDFs and screenshots load instantly without slowing down the app.</p>
+    </div>
+    <div class="card">
+      <h3>Saved Files (${items.length})</h3>
+      ${items.length?`<div class="vault-grid">
+        ${items.slice().reverse().map(v=>`
+          <div class="vault-card">
+            <div class="vault-thumb" onclick="previewFile('${v.fileId}')">
+              <div class="pdf-badge">${v.fileType==='application/pdf'?'📄 PDF DOCUMENT':'🖼 SCREENSHOT / IMAGE'}<div style="font-size:9px;color:#8f8d99;margin-top:4px;text-align:center">Tap to open</div></div>
+            </div>
+            <div>
+              <b style="font-size:12px;display:block">${esc(v.title)}</b>
+              <div class="muted" style="font-size:10px;margin-top:3px">${esc(v.subject)} • ${esc(v.category)}</div>
+            </div>
+            <div class="actions" style="margin-top:auto">
+              <button type="button" class="btn secondary" style="flex:1;padding:6px" onclick="previewFile('${v.fileId}')">Open</button>
+              <button type="button" class="icon-btn" style="padding:5px 9px" onclick="deleteVaultItem('${v.id}')">×</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>`:'<div class="empty">No screenshots or PDFs uploaded yet. Add your first formula sheet or question screenshot.</div>'}
+    </div>
+  </div>`;
+}
+
 function revision(){title('Revision Log');return `<div class="section-head"><h2>Revision Tracker</h2><small>SPACED REVISION RECORD</small></div><div class="two-col"><div class="card"><h3>Log a revision session</h3><form id="revisionForm"><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="e.g. Human Reproduction"></div><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div><div class="field"><label>REVISION TYPE</label><select name="kind"><option>Short notes</option><option>NCERT</option><option>Active recall</option><option>Questions / PYQs</option><option>Full chapter</option></select></div></div><button class="btn">Save revision</button></form></div><div class="card"><h3>Revision history</h3>${allRevs().length?allRevs().slice(0,60).map(r=>`<div class="list-item"><div><b>${esc(r.chapter)}</b><div class="muted">${esc(r.subject)} • ${esc(r.kind)}</div></div><span>${shortDate(r.date)}</span></div>`).join(''):'<div class="empty">Your revision history will appear here.</div>'}</div></div></div>`}
 function tests(){title('Mock Tests');let avg=db.tests.length?Math.round(db.tests.reduce((a,t)=>a+t.score,0)/db.tests.length):0;return `<div class="stats">${stat('TESTS TAKEN',db.tests.length,'Total recorded')}${stat('AVERAGE SCORE',avg,'Out of 720')}${stat('BEST SCORE',db.tests.length?Math.max(...db.tests.map(t=>t.score)):0,'Out of 720')}${stat('LATEST ACCURACY',db.tests.length?db.tests[db.tests.length-1].accuracy+'%':'—','As entered')}</div><div class="two-col"><div class="card"><h3>Record mock test</h3><form id="testForm"><div class="field"><label>TEST NAME</label><input name="name" placeholder="e.g. Full syllabus test 04" required></div><div class="form-grid"><div class="field"><label>SCORE ( / 720 )</label><input name="score" type="number" min="0" max="720" required></div><div class="field"><label>ACCURACY (%)</label><input name="accuracy" type="number" min="0" max="100" placeholder="e.g. 72"></div></div><div class="form-grid"><div class="field"><label>PHYSICS</label><input name="physics" type="number" min="0" max="180" placeholder="Score"></div><div class="field"><label>CHEMISTRY</label><input name="chemistry" type="number" min="0" max="180" placeholder="Score"></div></div><div class="field"><label>BIOLOGY</label><input name="biology" type="number" min="0" max="360" placeholder="Score"></div><div class="field"><label>ANALYSIS / NEXT ACTION</label><textarea name="analysis" placeholder="What needs attention before the next test?"></textarea></div><button class="btn">Save test</button></form></div><div class="card"><h3>Test history</h3>${db.tests.length?`<div class="table-wrap"><table><thead><tr><th>TEST</th><th>SCORE</th><th>ACCURACY</th><th>DATE</th><th></th></tr></thead><tbody>${db.tests.slice().reverse().map(t=>`<tr><td>${esc(t.name)}</td><td><b>${t.score}</b></td><td>${t.accuracy||'—'}%</td><td>${t.date}</td><td><button class="icon-btn" onclick="removeItem('tests','${t.id}')">×</button></td></tr>`).join('')}</tbody></table></div>${db.tests.slice().reverse().slice(0,3).map(t=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><b style="font-size:11px">${esc(t.name)}</b><p class="muted" style="font-size:10px">${esc(t.analysis||'No analysis added.')}</p></div>`).join('')}`:'<div class="empty">No mock tests recorded yet.</div>'}</div></div>`}
 function dayKeys(n){return Array.from({length:n},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(n-1-i));return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')})}
@@ -65,57 +540,98 @@ function barChart(labels,vals,id){const W=420,H=170,pt=20,pb=26,n=vals.length,ma
 function lineChart(labels,vals,max){const W=420,H=190,pl=30,pr=12,pt=20,pb=26,n=vals.length,step=n>1?(W-pl-pr)/(n-1):0,X=i=>n>1?pl+i*step:W/2,Y=v=>pt+(H-pt-pb)*(1-v/max);let o=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">`;[0,.25,.5,.75,1].forEach(f=>{const y=Y(max*f);o+=`<line x1="${pl}" x2="${W-pr}" y1="${y}" y2="${y}" stroke="#272731"/><text x="${pl-5}" y="${y+3}" text-anchor="end" class="cl">${Math.round(max*f)}</text>`});if(n>1)o+=`<polyline fill="none" stroke="#e33b4b" stroke-width="2.2" stroke-linejoin="round" points="${vals.map((v,i)=>X(i)+','+Y(v)).join(' ')}"/>`;vals.forEach((v,i)=>{o+=`<circle cx="${X(i)}" cy="${Y(v)}" r="4" fill="#09090d" stroke="#f04a5b" stroke-width="2"/><text x="${X(i)}" y="${Y(v)-9}" text-anchor="middle" class="cv">${v}</text><text x="${X(i)}" y="${H-9}" text-anchor="middle" class="cl">${esc(labels[i])}</text>`});return o+'</svg>'}
 function hbars(items,unit=''){const max=Math.max(...items.map(x=>x.value),1);return items.map(x=>`<div class="progress-row"><div class="progress-meta"><span>${esc(x.label)}</span><span>${x.value}${unit}</span></div><div class="bar"><span style="width:${x.value/max*100}%"></span></div></div>`).join('')}
 function streak(){const days=new Set([...db.sessions.map(x=>x.date),...db.tasks.filter(t=>t.done).map(t=>t.doneAt||t.date)]);let d=new Date(),c=0;const key=()=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');if(!days.has(key()))d.setDate(d.getDate()-1);while(days.has(key())){c++;d.setDate(d.getDate()-1)}return c}
-function analytics(){title('Analytics');
-const k7=dayKeys(7),lab=k7.map(dayLabel),focus7=k7.map(k=>db.sessions.filter(x=>x.date===k).reduce((a,x)=>a+x.minutes,0)),closed7=k7.map(k=>db.tasks.filter(t=>t.done&&(t.doneAt||t.date)===k).length);
-const totMin=db.sessions.reduce((a,x)=>a+x.minutes,0),closedAll=db.tasks.filter(t=>t.done).length,best=db.tests.length?Math.max(...db.tests.map(t=>t.score)):0;
-const last=db.tests.slice(-10),subs=['Physics','Chemistry','Biology'],subMax={Physics:180,Chemistry:180,Biology:360};
-const subAvg=subs.map(s=>{const arr=db.tests.filter(t=>t[s.toLowerCase()]>0);return{label:s,value:arr.length?Math.round(arr.reduce((a,t)=>a+t[s.toLowerCase()]/subMax[s]*100,0)/arr.length):0}});
-const mSub=subs.map(s=>({label:s,value:db.mistakes.filter(m=>m.subject===s).length}));
-const types=[...new Set(db.mistakes.map(m=>m.type))].map(t=>({label:t,value:db.mistakes.filter(m=>m.type===t).length})).sort((a,b)=>b.value-a.value);
-const fSub=['Physics','Chemistry','Biology'].map(s=>({label:s,value:db.sessions.filter(x=>x.subject===s).reduce((a,x)=>a+x.minutes,0)}));
-return `<div class="stats">${stat('TOTAL FOCUS',`${Math.floor(totMin/60)}h ${totMin%60}m`,'All time')}${stat('MISSIONS CLOSED',closedAll,'All time')}${stat('STREAK',`${streak()} day${streak()===1?'':'s'}`,'Focus or mission daily')}${stat('BEST SCORE',best,'Out of 720')}</div>
-<div class="grid2"><div class="card"><h3>Focus minutes — last 7 days</h3>${barChart(lab,focus7,'bar-f2')}</div><div class="card"><h3>Missions closed — last 7 days</h3>${barChart(lab,closed7,'bar-m')}</div></div>
-<div class="grid2" style="margin-top:14px"><div class="card"><h3>Mock test score trend</h3>${last.length?lineChart(last.map((t,i)=>'T'+(db.tests.length-last.length+i+1)),last.map(t=>t.score),720):'<div class="empty">Record a mock test to see your trend.</div>'}</div><div class="card"><h3>Subject-wise mock average (%)</h3>${db.tests.length?hbars(subAvg,'%'):'<div class="empty">Add subject scores in a mock test to see this.</div>'}<h3 style="margin-top:22px">Focus time by subject (min)</h3>${totMin?hbars(fSub):'<div class="empty">Log focus sessions to see this.</div>'}</div></div>
-<div class="grid2" style="margin-top:14px"><div class="card"><h3>Mistakes by subject</h3>${db.mistakes.length?hbars(mSub):'<div class="empty">No mistakes recorded yet.</div>'}</div><div class="card"><h3>Mistakes by type</h3>${types.length?hbars(types):'<div class="empty">No mistakes recorded yet.</div>'}<p class="muted" style="font-size:10px;margin-top:14px">Open: ${db.mistakes.filter(m=>!m.closed).length} • Fixed: ${db.mistakes.filter(m=>m.closed).length}</p></div></div>
-<div class="grid2" style="margin-top:14px"><div class="card"><h3>Chapters done (%)</h3>${hbars(TRACK_ORDER.map(k=>({label:TRACK[k].label,value:covg(k,'done')})),'%')}</div><div class="card"><h3>Revision 1 completed (%)</h3>${hbars(TRACK_ORDER.map(k=>({label:TRACK[k].label,value:covg(k,'r1')})),'%')}</div></div>`}
+
+function analytics(){
+  title('Analytics');
+  const k7=dayKeys(7),lab=k7.map(dayLabel),focus7=k7.map(k=>db.sessions.filter(x=>x.date===k).reduce((a,x)=>a+x.minutes,0)),closed7=k7.map(k=>db.tasks.filter(t=>t.done&&(t.doneAt||t.date)===k).length);
+  const totMin=db.sessions.reduce((a,x)=>a+x.minutes,0),closedAll=db.tasks.filter(t=>t.done).length,best=db.tests.length?Math.max(...db.tests.map(t=>t.score)):0;
+  const last=db.tests.slice(-10),subs=['Physics','Chemistry','Biology'],subMax={Physics:180,Chemistry:180,Biology:360};
+  const subAvg=subs.map(s=>{const arr=db.tests.filter(t=>t[s.toLowerCase()]>0);return{label:s,value:arr.length?Math.round(arr.reduce((a,t)=>a+t[s.toLowerCase()]/subMax[s]*100,0)/arr.length):0}});
+  const mSub=subs.map(s=>({label:s,value:db.mistakes.filter(m=>m.subject===s).length}));
+  const types=[...new Set(db.mistakes.map(m=>m.type))].map(t=>({label:t,value:db.mistakes.filter(m=>m.type===t).length})).sort((a,b)=>b.value-a.value);
+  const fSub=['Physics','Chemistry','Biology'].map(s=>({label:s,value:db.sessions.filter(x=>x.subject===s).reduce((a,x)=>a+x.minutes,0)}));
+  return `<div class="stats">${stat('TOTAL FOCUS',`${Math.floor(totMin/60)}h ${totMin%60}m`,'All time')}${stat('MISSIONS CLOSED',closedAll,'All time')}${stat('STREAK',`${streak()} day${streak()===1?'':'s'}`,'Focus or mission daily')}${stat('BEST SCORE',best,'Out of 720')}</div>
+  <div class="grid2"><div class="card"><h3>Focus minutes — last 7 days</h3>${barChart(lab,focus7,'bar-f2')}</div><div class="card"><h3>Missions closed — last 7 days</h3>${barChart(lab,closed7,'bar-m')}</div></div>
+  <div class="grid2" style="margin-top:14px"><div class="card"><h3>Mock test score trend</h3>${last.length?lineChart(last.map((t,i)=>'T'+(db.tests.length-last.length+i+1)),last.map(t=>t.score),720):'<div class="empty">Record a mock test to see your trend.</div>'}</div><div class="card"><h3>Subject-wise mock average (%)</h3>${db.tests.length?hbars(subAvg,'%'):'<div class="empty">Add subject scores in a mock test to see this.</div>'}<h3 style="margin-top:22px">Focus time by subject (min)</h3>${totMin?hbars(fSub):'<div class="empty">Log focus sessions to see this.</div>'}</div></div>
+  <div class="grid2" style="margin-top:14px"><div class="card"><h3>Mistakes by subject</h3>${db.mistakes.length?hbars(mSub):'<div class="empty">No mistakes recorded yet.</div>'}</div><div class="card"><h3>Mistakes by type</h3>${types.length?hbars(types):'<div class="empty">No mistakes recorded yet.</div>'}<p class="muted" style="font-size:10px;margin-top:14px">Open: ${db.mistakes.filter(m=>!m.closed).length} • Fixed: ${db.mistakes.filter(m=>m.closed).length}</p></div></div>
+  <div class="grid2" style="margin-top:14px"><div class="card"><h3>Chapters done (%)</h3>${hbars(TRACK_ORDER.map(k=>({label:TRACK[k].label,value:covg(k,'done')})),'%')}</div><div class="card"><h3>Revision 1 completed (%)</h3>${hbars(TRACK_ORDER.map(k=>({label:TRACK[k].label,value:covg(k,'r1')})),'%')}</div></div>`;
+}
+
 const NEET_SYLLABUS={
-Physics:['Physics and Measurement','Kinematics','Laws of Motion','Work, Energy and Power','Rotational Motion','Gravitation','Properties of Solids and Liquids','Thermodynamics','Kinetic Theory of Gases','Oscillations and Waves','Electrostatics','Current Electricity','Magnetic Effects of Current and Magnetism','Electromagnetic Induction and Alternating Currents','Electromagnetic Waves','Optics','Dual Nature of Matter and Radiation','Atoms and Nuclei','Electronic Devices','Experimental Skills'],
-Chemistry:['Some Basic Concepts in Chemistry','Atomic Structure','Chemical Bonding and Molecular Structure','Chemical Thermodynamics','Solutions','Equilibrium','Redox Reactions and Electrochemistry','Chemical Kinetics','Classification of Elements and Periodicity in Properties','p-Block Elements','d- and f-Block Elements','Coordination Compounds','Purification and Characterisation of Organic Compounds','Some Basic Principles of Organic Chemistry','Hydrocarbons','Organic Compounds Containing Halogens','Organic Compounds Containing Oxygen','Organic Compounds Containing Nitrogen','Biomolecules','Principles Related to Practical Chemistry'],
-Biology:['The Living World','Biological Classification','Plant Kingdom','Animal Kingdom','Morphology of Flowering Plants','Anatomy of Flowering Plants','Floral Families (Malvaceae, Cruciferae, Leguminosae, Compositae, Gramineae)','Animal Tissues','Frog (Morphology and Anatomy)','Cell: The Unit of Life','Biomolecules and Enzymes','Cell Cycle and Cell Division','Photosynthesis in Higher Plants','Respiration in Plants','Plant Growth and Development','Breathing and Exchange of Gases','Body Fluids and Circulation','Excretory Products and Their Elimination','Locomotion and Movement','Neural Control and Coordination','Chemical Coordination and Integration','Sexual Reproduction in Flowering Plants','Human Reproduction','Reproductive Health','Principles of Inheritance and Variation','Molecular Basis of Inheritance','Evolution','Human Health and Disease','Microbes in Human Welfare','Biotechnology: Principles and Processes','Biotechnology and Its Applications','Organisms and Populations','Ecosystem','Biodiversity and Conservation']};
-function loadSyllabus(silent){let added=0;for(const sub of Object.keys(NEET_SYLLABUS)){const have=new Set((db.chapters[sub]||[]).map(c=>c.name.trim().toLowerCase()));db.chapters[sub]=db.chapters[sub]||[];for(const [i,name] of NEET_SYLLABUS[sub].entries())if(!have.has(name.toLowerCase())){db.chapters[sub].push({id:crypto.randomUUID(),name,done:false,...(sub==='Chemistry'?{branch:i<8?'Physical':i<12?'Inorganic':'Organic'}:{})});added++}}db.syllabusLoaded=true;save();if(!silent){render();toast(added?`${added} chapters added.`:'All syllabus chapters already added.')}return added}
+  Physics:['Physics and Measurement','Kinematics','Laws of Motion','Work, Energy and Power','Rotational Motion','Gravitation','Properties of Solids and Liquids','Thermodynamics','Kinetic Theory of Gases','Oscillations and Waves','Electrostatics','Current Electricity','Magnetic Effects of Current and Magnetism','Electromagnetic Induction and Alternating Currents','Electromagnetic Waves','Optics','Dual Nature of Matter and Radiation','Atoms and Nuclei','Electronic Devices','Experimental Skills'],
+  Chemistry:['Some Basic Concepts in Chemistry','Atomic Structure','Chemical Bonding and Molecular Structure','Chemical Thermodynamics','Solutions','Equilibrium','Redox Reactions and Electrochemistry','Chemical Kinetics','Classification of Elements and Periodicity in Properties','p-Block Elements','d- and f-Block Elements','Coordination Compounds','Purification and Characterisation of Organic Compounds','Some Basic Principles of Organic Chemistry','Hydrocarbons','Organic Compounds Containing Halogens','Organic Compounds Containing Oxygen','Organic Compounds Containing Nitrogen','Biomolecules','Principles Related to Practical Chemistry'],
+  Biology:['The Living World','Biological Classification','Plant Kingdom','Animal Kingdom','Morphology of Flowering Plants','Anatomy of Flowering Plants','Floral Families (Malvaceae, Cruciferae, Leguminosae, Compositae, Gramineae)','Animal Tissues','Frog (Morphology and Anatomy)','Cell: The Unit of Life','Biomolecules and Enzymes','Cell Cycle and Cell Division','Photosynthesis in Higher Plants','Respiration in Plants','Plant Growth and Development','Breathing and Exchange of Gases','Body Fluids and Circulation','Excretory Products and Their Elimination','Locomotion and Movement','Neural Control and Coordination','Chemical Coordination and Integration','Sexual Reproduction in Flowering Plants','Human Reproduction','Reproductive Health','Principles of Inheritance and Variation','Molecular Basis of Inheritance','Evolution','Human Health and Disease','Microbes in Human Welfare','Biotechnology: Principles and Processes','Biotechnology and Its Applications','Organisms and Populations','Ecosystem','Biodiversity and Conservation']
+};
+function loadSyllabus(silent){let added=0;for(const sub of Object.keys(NEET_SYLLABUS)){const have=new Set((db.chapters[sub]||[]).map(c=>c.name.trim().toLowerCase()));db.chapters[sub]=db.chapters[sub]||[];for(const [i,name] of NEET_SYLLABUS[sub].entries())if(!have.has(name.toLowerCase())){db.chapters[sub].push({id:crypto.randomUUID(),name,done:false,strength:'Medium',weakTopics:'',...(sub==='Chemistry'?{branch:i<8?'Physical':i<12?'Inorganic':'Organic'}:{})});added++}}db.syllabusLoaded=true;save();if(!silent){render();toast(added?`${added} chapters added.`:'All syllabus chapters already added.')}return added}
 window.loadSyllabus=loadSyllabus;
+
 const TRACK_ORDER=['Physics','Physical','Inorganic','Organic','Biology'];
 const CHEM_COLS=[['module','Module'],['dpp','DPP'],['pyqj','JEE Mains PYQ'],['pyqn','NEET PYQ'],['air','AIR Assignment']];
 const TRACK={
-Physics:{label:'Physics',sub:'Physics',cols:[['module','Module'],['dpp','DPP'],['pyqj','PYQ JEE'],['pyqn','PYQ NEET']],rev:4},
-Physical:{label:'Physical Chem',sub:'Chemistry',branch:'Physical',cols:CHEM_COLS,rev:4},
-Inorganic:{label:'Inorganic Chem',sub:'Chemistry',branch:'Inorganic',cols:CHEM_COLS,rev:4},
-Organic:{label:'Organic Chem',sub:'Chemistry',branch:'Organic',cols:CHEM_COLS,rev:4},
-Biology:{label:'Biology',sub:'Biology',cols:[['punch','NCERT Punch 👊'],['module','Module'],['ncert','NCERT Line-by-Line']],rev:5}};
+  Physics:{label:'Physics',sub:'Physics',cols:[['module','Module'],['dpp','DPP'],['pyqj','PYQ JEE'],['pyqn','PYQ NEET']],rev:4},
+  Physical:{label:'Physical Chem',sub:'Chemistry',branch:'Physical',cols:CHEM_COLS,rev:4},
+  Inorganic:{label:'Inorganic Chem',sub:'Chemistry',branch:'Inorganic',cols:CHEM_COLS,rev:4},
+  Organic:{label:'Organic Chem',sub:'Chemistry',branch:'Organic',cols:CHEM_COLS,rev:4},
+  Biology:{label:'Biology',sub:'Biology',cols:[['punch','NCERT Punch 👊'],['module','Module'],['ncert','NCERT Line-by-Line']],rev:5}
+};
+
 function keepScroll(fn){const w=document.querySelector('.track-wrap'),x=w?w.scrollLeft:0,y=window.scrollY;fn();const n=document.querySelector('.track-wrap');if(n)n.scrollLeft=x;window.scrollTo(0,y)}
 window.setTrackTab=k=>{trackTab=k;render()};
 window.toggleCell=(id,key)=>{const cfg=TRACK[trackTab],c=(db.chapters[cfg.sub]||[]).find(x=>x.id===id);if(!c)return;if(key==='done')c.done=!c.done;else{c.t=c.t||{};if(c.t[key])delete c.t[key];else c.t[key]=today()}save();keepScroll(render)};
-window.addTrackChapter=e=>{e.preventDefault();const cfg=TRACK[trackTab],name=e.target.chapter.value.trim();if(!name)return;const ch={id:crypto.randomUUID(),name,done:false};if(cfg.branch)ch.branch=cfg.branch;db.chapters[cfg.sub].push(ch);save();keepScroll(render);toast('Chapter added.')};
+window.addTrackChapter=e=>{e.preventDefault();const cfg=TRACK[trackTab],name=e.target.chapter.value.trim();if(!name)return;const ch={id:crypto.randomUUID(),name,done:false,strength:'Medium',weakTopics:''};if(cfg.branch)ch.branch=cfg.branch;db.chapters[cfg.sub].push(ch);save();keepScroll(render);toast('Chapter added.')};
 function allRevs(){const out=db.revisions.map(r=>({date:r.date,chapter:r.chapter,subject:r.subject,kind:r.kind}));for(const sub of Object.keys(db.chapters))for(const c of db.chapters[sub])for(const [k,d] of Object.entries(c.t||{}))if(/^r\d$/.test(k))out.push({date:d,chapter:c.name,subject:sub,kind:'Revision '+k.slice(1)});return out.sort((a,b)=>b.date.localeCompare(a.date))}
 function covg(k,key){const l=tabChapters(TRACK[k]);return l.length?Math.round(l.filter(c=>key==='done'?c.done:(c.t||{})[key]).length/l.length*100):0}
-function render(){let html={dashboard,missions,subjects,focus,mistakes,revision,tests,analytics}[current]();document.getElementById('view').innerHTML=html;bindForms();if(current==='focus'){document.getElementById('startTimer').onclick=startTimer;document.getElementById('resetTimer').onclick=()=>setTimer(25)}}
-function bindForms(){
-const bind=(id,fn)=>{const el=document.getElementById(id);if(el)el.onsubmit=e=>{e.preventDefault();fn(el)}};
-bind('taskForm',f=>{db.tasks.push({id:crypto.randomUUID(),date:today(),text:f.text.value.trim(),subject:f.subject.value,done:false});save();render();toast('Mission added.')});
-bind('sessionForm',f=>{db.sessions.push({id:crypto.randomUUID(),date:today(),subject:f.subject.value,minutes:+f.minutes.value,topic:f.topic.value.trim()});save();render();toast('Study session saved.')});
-bind('mistakeForm',f=>{db.mistakes.push({id:crypto.randomUUID(),date:today(),subject:f.subject.value,type:f.type.value,chapter:f.chapter.value.trim(),error:f.error.value.trim(),fix:f.fix.value.trim()});save();render();toast('Mistake recorded. Learn from it.')});
-bind('revisionForm',f=>{db.revisions.push({id:crypto.randomUUID(),date:today(),chapter:f.chapter.value.trim(),subject:f.subject.value,kind:f.kind.value});save();render();toast('Revision logged.')});
-bind('testForm',f=>{db.tests.push({id:crypto.randomUUID(),date:today(),name:f.name.value.trim(),score:+f.score.value,accuracy:+f.accuracy.value||0,physics:+f.physics.value||0,chemistry:+f.chemistry.value||0,biology:+f.biology.value||0,analysis:f.analysis.value.trim()});save();render();toast('Mock test saved.')});
+
+function render(){
+  let html={dashboard,missions,subjects,focus,mistakes,revision,tests,vault,analytics}[current]();
+  document.getElementById('view').innerHTML=html;
+  bindForms();
+  if(current==='dashboard')startLiveCountdown();
+  if(current==='focus'){
+    document.getElementById('startTimer').onclick=startTimer;
+    document.getElementById('resetTimer').onclick=()=>setTimer(Math.round(timerInitial/60)||25);
+  }
 }
+
+function bindForms(){
+  const bind=(id,fn)=>{const el=document.getElementById(id);if(el)el.onsubmit=async e=>{e.preventDefault();await fn(el)}};
+  bind('taskForm',f=>{db.tasks.push({id:crypto.randomUUID(),date:today(),text:f.text.value.trim(),subject:f.subject.value,done:false});save();render();toast('Mission added.')});
+  bind('sessionForm',f=>{
+    const mins=parseInt(f.minutes.value,10);
+    if(!mins||mins<1){toast('Enter valid minutes.');return}
+    db.sessions.push({id:crypto.randomUUID(),date:today(),subject:f.subject.value,minutes:mins,topic:f.topic.value.trim()});
+    save();render();toast('Study session saved.');
+  });
+  bind('mistakeForm',async f=>{
+    let fileMeta={};
+    const fileInput=f.attachment.files[0];
+    if(fileInput){
+      const saved=await storeFile(fileInput);
+      fileMeta={fileId:saved.id,fileName:saved.name,fileType:saved.type};
+    }
+    db.mistakes.push({id:crypto.randomUUID(),date:today(),subject:f.subject.value,type:f.type.value,chapter:f.chapter.value.trim(),error:f.error.value.trim(),fix:f.fix.value.trim(),...fileMeta});
+    save();render();toast('Mistake recorded.');
+  });
+  bind('vaultForm',async f=>{
+    const fileInput=f.file.files[0];
+    if(!fileInput)return;
+    const saved=await storeFile(fileInput);
+    db.vault=db.vault||[];
+    db.vault.push({id:crypto.randomUUID(),date:today(),title:f.title.value.trim(),subject:f.subject.value,category:f.category.value,fileId:saved.id,fileName:saved.name,fileType:saved.type});
+    save();render();toast('Saved to Study Vault.');
+  });
+  bind('revisionForm',f=>{db.revisions.push({id:crypto.randomUUID(),date:today(),chapter:f.chapter.value.trim(),subject:f.subject.value,kind:f.kind.value});save();render();toast('Revision logged.')});
+  bind('testForm',f=>{db.tests.push({id:crypto.randomUUID(),date:today(),name:f.name.value.trim(),score:+f.score.value,accuracy:+f.accuracy.value||0,physics:+f.physics.value||0,chemistry:+f.chemistry.value||0,biology:+f.biology.value||0,analysis:f.analysis.value.trim()});save();render();toast('Mock test saved.')});
+}
+
 window.toggleTask=(id,v)=>{let t=db.tasks.find(x=>x.id===id);if(t){t.done=v;t.doneAt=v?today():null}save();render()};
 window.setMissionTab=t=>{missionTab=t;render()};
 window.setMistakeTab=t=>{mistakeTab=t;render()};
-window.toggleMistake=id=>{let m=db.mistakes.find(x=>x.id===id);if(m){m.closed=!m.closed;m.closedAt=m.closed?today():null}save();render();toast(m&&m.closed?'Mistake closed. Nice work.':'Mistake reopened.')};
+window.toggleMistake=id=>{let m=db.mistakes.find(x=>x.id===id);if(m){m.closed=!m.closed;m.closedAt=m.closed?today():null}save();render();toast(m&&m.closed?'Mistake closed.':'Mistake reopened.')};
 window.deleteTask=id=>{db.tasks=db.tasks.filter(t=>t.id!==id);save();render();toast('Mission removed.')};
-window.addChapter=(e,s)=>{e.preventDefault();let name=e.target.chapter.value.trim();db.chapters[s].push({id:crypto.randomUUID(),name,done:false});save();render();toast('Chapter added.')};
-window.toggleChapter=(s,id,v)=>{let c=db.chapters[s].find(x=>x.id===id);if(c)c.done=v;save();render()};
 window.deleteChapter=(s,id)=>{if(!confirm('Delete this chapter and all its ticks and dates?'))return;db.chapters[s]=db.chapters[s].filter(x=>x.id!==id);save();keepScroll(render)};
 window.removeItem=(list,id)=>{db[list]=db[list].filter(x=>x.id!==id);save();render();toast('Record removed.')};
+
 document.getElementById('exportBtn').onclick=()=>{let blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`igris-backup-${today()}.json`;a.click();URL.revokeObjectURL(a.href);toast('Backup downloaded.')};
 if(!db.syllabusLoaded&&Object.values(db.chapters).every(a=>!a.length))loadSyllabus(true);
 render();
