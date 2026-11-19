@@ -1,5 +1,10 @@
 const KEY='igris-neet-v1';
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+const addDays=(isoDate,days)=>{
+  const [y,m,d]=String(isoDate||today()).split('-').map(Number);
+  const dt=new Date(y,(m||1)-1,(d||1)+days,12,0,0);
+  return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+};
 const seed=()=>({
   tasks:[],
   chapters:{Physics:[],Chemistry:[],Biology:[]},
@@ -303,9 +308,28 @@ function dashboard(){
   </div>`;
 }
 
-function taskHTML(t){const old=!t.done&&t.date<today()?`<span class="tag gold">${dateText(t.date)}</span>`:'';return `<label class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span>${old}<small>${esc(t.subject||'GENERAL')}</small><button class="icon-btn" style="padding:3px 7px" onclick="deleteTask('${t.id}')">×</button></label>`}
+function taskHTML(t){
+  const carried=!t.done&&t.date<today();
+  const old=carried?`<span class="tag gold">Carried over • ${dateText(t.date)}</span>`:'';
+  return `<label class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span>${old}<small>${esc(t.subject||'GENERAL')}</small><button class="icon-btn" style="padding:3px 7px" onclick="deleteTask('${t.id}')">×</button></label>`;
+}
 function recentActivity(){let items=[...db.sessions.map(x=>({date:x.date,text:`Focus session • ${x.subject} • ${x.minutes} min${x.questions?' • '+x.questions+' Qs':''}`})),...db.tests.map(x=>({date:x.date,text:`Mock test • ${x.name} • ${x.score} marks`})),...(db.quizAttempts||[]).map(x=>({date:x.date,text:`Quiz (${x.chapter}) • ${x.score}/${x.total} (${x.accuracy}%)`})),...allRevs().slice(0,5).map(x=>({date:x.date,text:`Revision • ${x.chapter} (${x.kind})`}))].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);return items.length?items.map(x=>`<div class="list-item"><span>${esc(x.text)}</span><span class="muted">${x.date}</span></div>`).join(''):'<div class="empty">Your activity will appear here as you use IGRIS.</div>'}
 function tabsHTML(cur,open,closed,fn){return `<div class="tabs"><button type="button" class="tab ${cur==='open'?'active':''}" onclick="${fn}('open')">Open <b>${open}</b></button><button type="button" class="tab ${cur==='closed'?'active':''}" onclick="${fn}('closed')">Closed <b>${closed}</b></button></div>`}
+
+function suggestMissionSubject(txt=''){
+  const s=txt.toLowerCase();
+  if(/\b(nlm|kinematics|projectile|friction|work power|rotational|gravitation|shm|wave|electrostatics|capacitor|current electricity|magnetism|emi|ac|optics|ray optics|wave optics|modern physics|atom|nuclei|semiconductor|vector|unit)\b/.test(s))return 'Physics';
+  if(/\b(mole|stoichiometry|atomic|thermodynamics|equilibrium|electrochemistry|kinetics|chemical bonding|coordination|organic|aldehyde|ketone|carboxylic|amine|haloalkane|alcohol|phenol|biomolecule|iupac|isomerism|periodic|solution|physical chem|inorganic)\b/.test(s))return 'Chemistry';
+  if(/\b(cell|mitosis|meiosis|genetics|dna|rna|transcription|translation|evolution|reproduction|human physiology|digestion|breathing|circulation|excretion|neural|endocrine|plant physiology|photosynthesis|respiration|ecology|biodiversity|biotech|microbe|human health|ncert|morphology|anatomy)\b/.test(s))return 'Biology';
+  return null;
+}
+
+window.onMissionDescInput=el=>{
+  const sel=document.querySelector('#taskForm select[name="subject"]');
+  if(!sel || sel.dataset.manual==='1')return;
+  const hit=suggestMissionSubject(el.value);
+  if(hit)sel.value=hit;
+};
 
 function missions(){
   title('Daily Missions');
@@ -316,8 +340,8 @@ function missions(){
     <div class="card"><h3>Your missions</h3>${tabsHTML(missionTab,open.length,closed.length,'setMissionTab')}${list.length?list.map(taskHTML).join(''):`<div class="empty">${empty}</div>`}<div style="margin-top:12px">${progress('TODAY’S COMPLETION',td,tt.length)}</div></div>
     <div class="card"><h3>Deploy a new mission</h3>
       <form id="taskForm">
-        <div class="field"><label>TASK DESCRIPTION</label><input name="text" placeholder="e.g. Revise NLM notes + 30 MCQs" required></div>
-        <div class="field"><label>SUBJECT</label><select name="subject"><option>General</option><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
+        <div class="field"><label>TASK DESCRIPTION</label><input name="text" placeholder="e.g. Revise NLM notes + 30 MCQs" oninput="onMissionDescInput(this)" required></div>
+        <div class="field"><label>SUBJECT</label><select name="subject" onchange="this.dataset.manual='1'"><option>General</option><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
         <button class="btn">＋ Add mission</button>
       </form>
       <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open missions carry over until you close them.</p>
@@ -710,7 +734,7 @@ window.answerQuizOpt=(choiceIdx)=>{
   quizAnswered=true;
   quizPickedIdx=choiceIdx;
   const curQ=activeQuiz[quizIdx];
-  const mk=normalizeMark(curQ.mark||curQ.tag);
+  const mk=normalizeMark(curQ.mark||q.tag);
   const isCorrect=choiceIdx===curQ.ans;
   const trueAnsText=curQ.opts[curQ.ans];
   if(isCorrect)quizScore++;
@@ -1204,8 +1228,53 @@ function vault(){
   </div>`;
 }
 
-function revision(){title('Revision Log');return `<div class="section-head"><h2>Revision Tracker</h2><small>SPACED REVISION RECORD</small></div><div class="two-col"><div class="card"><h3>Log a revision session</h3><form id="revisionForm"><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="e.g. Human Reproduction"></div><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div><div class="field"><label>REVISION TYPE</label><select name="kind"><option>Short notes</option><option>NCERT</option><option>Active recall</option><option>Questions / PYQs</option><option>Full chapter</option></select></div></div><button class="btn">Save revision</button></form></div><div class="card"><h3>Revision history</h3>${allRevs().length?allRevs().slice(0,60).map(r=>`<div class="list-item"><div><b>${esc(r.chapter)}</b><div class="muted">${esc(r.subject)} • ${esc(r.kind)}</div></div><span>${shortDate(r.date)}</span></div>`).join(''):'<div class="empty">Your revision history will appear here.</div>'}</div></div></div>`}
-function tests(){title('Mock Tests');let avg=db.tests.length?Math.round(db.tests.reduce((a,t)=>a+t.score,0)/db.tests.length):0;return `<div class="stats">${stat('TESTS TAKEN',db.tests.length,'Total recorded')}${stat('AVERAGE SCORE',avg,'Out of 720')}${stat('BEST SCORE',db.tests.length?Math.max(...db.tests.map(t=>t.score)):0,'Out of 720')}${stat('LATEST ACCURACY',db.tests.length?db.tests[db.tests.length-1].accuracy+'%':'—','As entered')}</div><div class="two-col"><div class="card"><h3>Record mock test</h3><form id="testForm"><div class="field"><label>TEST NAME</label><input name="name" placeholder="e.g. Full syllabus test 04" required></div><div class="form-grid"><div class="field"><label>SCORE ( / 720 )</label><input name="score" type="number" min="0" max="720" required></div><div class="field"><label>ACCURACY (%)</label><input name="accuracy" type="number" min="0" max="100" placeholder="e.g. 72"></div></div><div class="form-grid"><div class="field"><label>PHYSICS</label><input name="physics" type="number" min="0" max="180" placeholder="Score"></div><div class="field"><label>CHEMISTRY</label><input name="chemistry" type="number" min="0" max="180" placeholder="Score"></div></div><div class="field"><label>BIOLOGY</label><input name="biology" type="number" min="0" max="360" placeholder="Score"></div><div class="field"><label>ANALYSIS / NEXT ACTION</label><textarea name="analysis" placeholder="What needs attention before the next test?"></textarea></div><button class="btn">Save test</button></form></div><div class="card"><h3>Test history</h3>${db.tests.length?`<div class="table-wrap"><table><thead><tr><th>TEST</th><th>SCORE</th><th>ACCURACY</th><th>DATE</th><th></th></tr></thead><tbody>${db.tests.slice().reverse().map(t=>`<tr><td>${esc(t.name)}</td><td><b>${t.score}</b></td><td>${t.accuracy||'—'}%</td><td>${t.date}</td><td><button class="icon-btn" onclick="removeItem('tests','${t.id}')">×</button></td></tr>`).join('')}</tbody></table></div>${db.tests.slice().reverse().slice(0,3).map(t=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><b style="font-size:11px">${esc(t.name)}</b><p class="muted" style="font-size:10px">${esc(t.analysis||'No analysis added.')}</p></div>`).join('')}`:'<div class="empty">No mock tests recorded yet.</div>'}</div></div>`}
+function revisionScheduleDates(r){
+  const base=r.date||today();
+  const d3=r.r3||addDays(base,3);
+  const d7=r.r7||addDays(base,7);
+  const d21=r.r21||addDays(base,21);
+  return {d3,d7,d21};
+}
+
+function dueRevisionsList(){
+  const t=today();
+  return db.revisions
+    .map(r=>{
+      const {d3,d7,d21}=revisionScheduleDates(r);
+      const dueDates=[d3,d7,d21].filter(d=>d<=t);
+      return {...r,d3,d7,d21,dueDates};
+    })
+    .filter(r=>r.dueDates.length>0)
+    .sort((a,b)=>a.dueDates[0].localeCompare(b.dueDates[0]));
+}
+
+function revision(){
+  title('Revision Log');
+  const dueList=dueRevisionsList();
+  return `<div class="section-head"><h2>Revision Tracker</h2><small>SPACED REVISION RECORD (+3 / +7 / +21 DAYS)</small></div>
+  ${dueList.length?`<div class="card" style="margin-bottom:14px;border-color:#a36d10">
+    <div class="section-head" style="margin-top:0"><h3>Due for Revision Today (${dueList.length})</h3><span class="tag gold">SPACED DUE</span></div>
+    ${dueList.map(r=>`<div class="list-item"><div><b>${esc(r.chapter)}</b> <span class="tag blue">${esc(r.subject)}</span><div class="muted" style="margin-top:3px">Logged ${shortDate(r.date)} • Due milestones: ${r.dueDates.map(shortDate).join(', ')}</div></div><span class="tag gold">DUE ${shortDate(r.dueDates[r.dueDates.length-1])}</span></div>`).join('')}
+  </div>`:''}
+  <div class="two-col"><div class="card"><h3>Log a revision session</h3><form id="revisionForm"><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="e.g. Human Reproduction"></div><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div><div class="field"><label>REVISION TYPE</label><select name="kind"><option>Short notes</option><option>NCERT</option><option>Active recall</option><option>Questions / PYQs</option><option>Full chapter</option></select></div></div><button class="btn">Save revision</button></form></div><div class="card"><h3>Revision history</h3>${allRevs().length?allRevs().slice(0,60).map(r=>{const {d3,d7,d21}=revisionScheduleDates(r);const isDue=(d3<=today()||d7<=today()||d21<=today());return `<div class="list-item"><div><b>${esc(r.chapter)}</b> ${isDue?'<span class="tag gold">DUE</span>':''}<div class="muted">${esc(r.subject)} • ${esc(r.kind)} • Next: +3d (${shortDate(d3)}), +7d (${shortDate(d7)}), +21d (${shortDate(d21)})</div></div><span>${shortDate(r.date)}</span></div>`}).join(''):'<div class="empty">Your revision history will appear here.</div>'}</div></div></div>`;
+}
+
+window.autoCalcMockScore=()=>{
+  const f=document.getElementById('testForm');
+  if(!f)return;
+  const p=Number(f.physics?.value||0);
+  const c=Number(f.chemistry?.value||0);
+  const b=Number(f.biology?.value||0);
+  if(p>0 || c>0 || b>0){
+    f.score.value=Math.min(720,p+c+b);
+  }
+};
+
+function tests(){
+  title('Mock Tests');
+  let avg=db.tests.length?Math.round(db.tests.reduce((a,t)=>a+t.score,0)/db.tests.length):0;
+  return `<div class="stats">${stat('TESTS TAKEN',db.tests.length,'Total recorded')}${stat('AVERAGE SCORE',avg,'Out of 720')}${stat('BEST SCORE',db.tests.length?Math.max(...db.tests.map(t=>t.score)):0,'Out of 720')}${stat('LATEST ACCURACY',db.tests.length?db.tests[db.tests.length-1].accuracy+'%':'—','As entered')}</div><div class="two-col"><div class="card"><h3>Record mock test</h3><form id="testForm" oninput="autoCalcMockScore()"><div class="field"><label>TEST NAME</label><input name="name" placeholder="e.g. Full syllabus test 04" required></div><div class="form-grid"><div class="field"><label>SCORE ( / 720 )</label><input name="score" type="number" min="0" max="720" required></div><div class="field"><label>ACCURACY (%)</label><input name="accuracy" type="number" min="0" max="100" placeholder="e.g. 72"></div></div><div class="form-grid"><div class="field"><label>PHYSICS</label><input name="physics" type="number" min="0" max="180" placeholder="Score"></div><div class="field"><label>CHEMISTRY</label><input name="chemistry" type="number" min="0" max="180" placeholder="Score"></div></div><div class="field"><label>BIOLOGY</label><input name="biology" type="number" min="0" max="360" placeholder="Score"></div><div class="field"><label>ANALYSIS / NEXT ACTION</label><textarea name="analysis" placeholder="What needs attention before the next test?"></textarea></div><button class="btn">Save test</button></form></div><div class="card"><h3>Test history</h3>${db.tests.length?`<div class="table-wrap"><table><thead><tr><th>TEST</th><th>SCORE</th><th>P / C / B</th><th>ACCURACY</th><th>DATE</th><th></th></tr></thead><tbody>${db.tests.slice().reverse().map(t=>{const pcb=(t.physics||t.chemistry||t.biology)?`${t.physics||0} / ${t.chemistry||0} / ${t.biology||0}`:'—';return `<tr><td>${esc(t.name)}</td><td><b>${t.score}</b></td><td><span class="muted">${pcb}</span></td><td>${t.accuracy||'—'}%</td><td>${t.date}</td><td><button class="icon-btn" onclick="removeItem('tests','${t.id}')">×</button></td></tr>`}).join('')}</tbody></table></div>${db.tests.slice().reverse().slice(0,3).map(t=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><b style="font-size:11px">${esc(t.name)}</b><p class="muted" style="font-size:10px">${esc(t.analysis||'No analysis added.')}</p></div>`).join('')}`:'<div class="empty">No mock tests recorded yet.</div>'}</div></div>`;
+}
 function dayKeys(n){return Array.from({length:n},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(n-1-i));return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')})}
 function dayLabel(k){return new Date(k+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short'})}
 function barChart(labels,vals,id){const W=420,H=170,pt=20,pb=26,n=vals.length,max=Math.max(...vals,1),bw=W/n;let o=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f04a5b"/><stop offset="1" stop-color="#7c1d2a"/></linearGradient></defs><line x1="0" x2="${W}" y1="${H-pb}" y2="${H-pb}" stroke="#272731"/>`;vals.forEach((v,i)=>{const h=(H-pt-pb)*v/max,x=i*bw+bw*.18,y=H-pb-h;o+=`<rect x="${x}" y="${y}" width="${bw*.64}" height="${v?Math.max(h,3):0}" rx="4" fill="url(#${id})"/>`;if(v)o+=`<text x="${x+bw*.32}" y="${y-5}" text-anchor="middle" class="cv">${v}</text>`;o+=`<text x="${x+bw*.32}" y="${H-9}" text-anchor="middle" class="cl">${esc(labels[i])}</text>`});return o+'</svg>'}
@@ -1251,7 +1320,7 @@ function keepScroll(fn){const w=document.querySelector('.track-wrap'),x=w?w.scro
 window.setTrackTab=k=>{trackTab=k;render()};
 window.toggleCell=(id,key)=>{const cfg=TRACK[trackTab],c=(db.chapters[cfg.sub]||[]).find(x=>x.id===id);if(!c)return;if(key==='done')c.done=!c.done;else{c.t=c.t||{};if(c.t[key])delete c.t[key];else c.t[key]=today()}save();keepScroll(render)};
 window.addTrackChapter=e=>{e.preventDefault();const cfg=TRACK[trackTab],name=e.target.chapter.value.trim();if(!name)return;const ch={id:crypto.randomUUID(),name,done:false,strength:'Medium',weakTopics:''};if(cfg.branch)ch.branch=cfg.branch;db.chapters[cfg.sub].push(ch);save();keepScroll(render);toast('Chapter added.')};
-function allRevs(){const out=db.revisions.map(r=>({date:r.date,chapter:r.chapter,subject:r.subject,kind:r.kind}));for(const sub of Object.keys(db.chapters))for(const c of db.chapters[sub])for(const [k,d] of Object.entries(c.t||{}))if(/^r\d$/.test(k))out.push({date:d,chapter:c.name,subject:sub,kind:'Revision '+k.slice(1)});return out.sort((a,b)=>b.date.localeCompare(a.date))}
+function allRevs(){const out=db.revisions.map(r=>({date:r.date,chapter:r.chapter,subject:r.subject,kind:r.kind,r3:r.r3,r7:r.r7,r21:r.r21}));for(const sub of Object.keys(db.chapters))for(const c of db.chapters[sub])for(const [k,d] of Object.entries(c.t||{}))if(/^r\d$/.test(k))out.push({date:d,chapter:c.name,subject:sub,kind:'Revision '+k.slice(1)});return out.sort((a,b)=>b.date.localeCompare(a.date))}
 function covg(k,key){const l=tabChapters(TRACK[k]);return l.length?Math.round(l.filter(c=>key==='done'?c.done:(c.t||{})[key]).length/l.length*100):0}
 
 function render(){
@@ -1295,8 +1364,18 @@ function bindForms(){
     db.vault.push({id:crypto.randomUUID(),date:today(),title:f.title.value.trim(),subject:f.subject.value,category:f.category.value,fileId:saved.id,fileName:saved.name,fileType:saved.type});
     save();render();toast('Saved to Study Vault.');
   });
-  bind('revisionForm',f=>{db.revisions.push({id:crypto.randomUUID(),date:today(),chapter:f.chapter.value.trim(),subject:f.subject.value,kind:f.kind.value});save();render();toast('Revision logged.')});
-  bind('testForm',f=>{db.tests.push({id:crypto.randomUUID(),date:today(),name:f.name.value.trim(),score:+f.score.value,accuracy:+f.accuracy.value||0,physics:+f.physics.value||0,chemistry:+f.chemistry.value||0,biology:+f.biology.value||0,analysis:f.analysis.value.trim()});save();render();toast('Mock test saved.')});
+  bind('revisionForm',f=>{
+    const d=today();
+    db.revisions.push({id:crypto.randomUUID(),date:d,r3:addDays(d,3),r7:addDays(d,7),r21:addDays(d,21),chapter:f.chapter.value.trim(),subject:f.subject.value,kind:f.kind.value});
+    save();render();toast('Revision logged (+3d / +7d / +21d scheduled).');
+  });
+  bind('testForm',f=>{
+    const p=+f.physics.value||0,c=+f.chemistry.value||0,b=+f.biology.value||0;
+    const manualScore=+f.score.value;
+    const finalScore=(p||c||b)?(manualScore||p+c+b):manualScore;
+    db.tests.push({id:crypto.randomUUID(),date:today(),name:f.name.value.trim(),score:finalScore,accuracy:+f.accuracy.value||0,physics:p,chemistry:c,biology:b,analysis:f.analysis.value.trim()});
+    save();render();toast('Mock test saved.');
+  });
 }
 
 window.toggleTask=(id,v)=>{let t=db.tasks.find(x=>x.id===id);if(t){t.done=v;t.doneAt=v?today():null}save();render()};
