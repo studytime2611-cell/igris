@@ -539,7 +539,11 @@ window.setPracticeTab=t=>{clearInterval(quizClockInterval);practiceTab=t;render(
 window.setAttemptChapterFilter=ch=>{attemptChapterFilter=ch;render()};
 window.selectQuizSubject=sub=>{selectedQuizSubject=sub;render()};
 window.exitActiveQuiz=()=>{clearInterval(quizClockInterval);activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;render()};
-window.startQuizByChapter=(sub,ch)=>{startSavedQuiz(sub||'All',ch||'All','All')};
+window.launchChapterBtn=btn=>{
+  const sub=btn?.dataset?.sub||'All';
+  const chap=btn?.dataset?.chap||'All';
+  startSavedQuiz(sub,chap,'All');
+};
 
 function startQuizStopwatch(){
   clearInterval(quizClockInterval);
@@ -636,10 +640,14 @@ window.importBulkJson=()=>{
 
 window.startSavedQuiz=(subFilter='All',chapFilter='All',markFilter='All')=>{
   const targetMark=markFilter==='All'?'All':normalizeMark(markFilter);
+  const normSub=String(subFilter||'All').trim().toLowerCase();
+  const normChap=String(chapFilter||'All').trim().toLowerCase();
   const pool=(db.quizzes||[]).filter(q=>{
     const qMark=normalizeMark(q.mark||q.tag);
-    return (subFilter==='All'||q.subject===subFilter) &&
-           (chapFilter==='All'||q.chapter===chapFilter) &&
+    const qSub=String(q.subject||'').trim().toLowerCase();
+    const qChap=String(q.chapter||'').trim().toLowerCase();
+    return (normSub==='all'||qSub===normSub) &&
+           (normChap==='all'||qChap===normChap) &&
            (targetMark==='All'||qMark===targetMark);
   });
   if(!pool.length){toast(`No ${targetMark==='All'?'saved':targetMark} MCQs found for this selection.`);return}
@@ -847,7 +855,7 @@ function practiceView(){
           </div>`;
         })() : selectedQuizSubject ? (()=>{
           const chList=getChaptersForSubject(selectedQuizSubject);
-          const subBank=qBank.filter(x=>x.subject===selectedQuizSubject);
+          const subBank=qBank.filter(x=>String(x.subject||'').trim().toLowerCase()===selectedQuizSubject.toLowerCase());
           return `<div>
             <div class="muted" style="margin-bottom:10px">Chapter select karke quiz start karein ya ${esc(selectedQuizSubject)} ke Imp / Hard / Easy / Medium questions filter karein.</div>
             <div class="actions" style="margin-bottom:14px;flex-wrap:wrap">
@@ -859,10 +867,10 @@ function practiceView(){
             </div>
             <div style="max-height:320px;overflow:auto">
               ${chList.map(ch=>{
-                const cnt=subBank.filter(x=>x.chapter===ch).length;
+                const cnt=subBank.filter(x=>String(x.chapter||'').trim().toLowerCase()===ch.trim().toLowerCase()).length;
                 return `<div class="list-item">
                   <span><b>${esc(ch)}</b> <span class="tag ${cnt?'green':''}">${cnt} Qs ready</span></span>
-                  <button type="button" class="btn ${cnt?'secondary':'ghost'}" style="padding:5px 10px" onclick="startQuizByChapter('${selectedQuizSubject}',${JSON.stringify(ch)})">Start Chapter</button>
+                  <button type="button" class="btn ${cnt?'secondary':'ghost'}" style="padding:5px 10px" data-sub="${esc(selectedQuizSubject)}" data-chap="${esc(ch)}" onclick="launchChapterBtn(this)">Start Chapter</button>
                 </div>`;
               }).join('')}
             </div>
@@ -887,7 +895,7 @@ function practiceView(){
             ${bankChapters.length?`<div style="margin-top:14px"><div class="eyebrow" style="margin-bottom:6px">DIRECT CHAPTER SHORTCUTS</div><div class="actions" style="flex-wrap:wrap">${bankChapters.map(ch=>{
               const cQs=qBank.filter(x=>x.chapter===ch);
               const cSub=cQs[0]?.subject||'All';
-              return `<button type="button" class="btn ghost" style="padding:5px 9px;font-size:10px" onclick="startQuizByChapter(${JSON.stringify(cSub)},${JSON.stringify(ch)})">${esc(ch)} (${cQs.length})</button>`;
+              return `<button type="button" class="btn ghost" style="padding:5px 9px;font-size:10px" data-sub="${esc(cSub)}" data-chap="${esc(ch)}" onclick="launchChapterBtn(this)">${esc(ch)} (${cQs.length})</button>`;
             }).join('')}</div></div>`:''}
           `;
         })()}
@@ -928,7 +936,7 @@ function practiceView(){
             </div>
             <div class="actions">
               ${a.wrongItems && a.wrongItems.length ? `<button type="button" class="btn danger" style="padding:5px 9px" onclick="retryAttemptWrongQuestions('${a.id}')">Retry Wrong (${a.wrongItems.length})</button>` : ''}
-              ${a.chapter && a.chapter!=='Mixed Chapters' && qBank.some(q=>q.chapter===a.chapter)?`<button type="button" class="btn secondary" style="padding:5px 9px" onclick="startQuizByChapter(${JSON.stringify(a.subject)},${JSON.stringify(a.chapter)})">Re-Attempt</button>`:''}
+              ${a.chapter && a.chapter!=='Mixed Chapters' && qBank.some(q=>q.chapter===a.chapter)?`<button type="button" class="btn secondary" style="padding:5px 9px" data-sub="${esc(a.subject)}" data-chap="${esc(a.chapter)}" onclick="launchChapterBtn(this)">Re-Attempt</button>`:''}
               <button type="button" class="icon-btn" onclick="deleteAttempt('${a.id}')">×</button>
             </div>
           </div>`;
