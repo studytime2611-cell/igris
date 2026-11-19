@@ -13,9 +13,9 @@ const seed=()=>({
   settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:''}
 });
 
-let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All';
-let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null;
-let activeQuiz=null, activeQuizMeta={subject:'All',chapter:'All'}, quizIdx=0, quizScore=0, quizAnswered=false, quizWrongList=[], retestIdx=0, aiOutput='';
+let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All', selectedQuizSubject=null;
+let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null, quizClockInterval=null;
+let activeQuiz=null, activeQuizMeta={subject:'All',chapter:'All'}, quizIdx=0, quizScore=0, quizAnswered=false, quizPickedIdx=null, quizWrongList=[], quizElapsedSec=0, retestIdx=0, aiOutput='';
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -24,6 +24,7 @@ const SAMPLE_JSON=JSON.stringify([
     "q":"Crossing over takes place between non-sister chromatids of homologous chromosomes during which stage of meiosis I?",
     "opts":["Leptotene","Pachytene","Diplotene","Diakinesis"],
     "ans":1,
+    "mark":"Imp",
     "exp":"Recombination nodules appear during Pachytene where crossing over occurs between non-sister chromatids."
   },
   {
@@ -32,6 +33,7 @@ const SAMPLE_JSON=JSON.stringify([
     "q":"A block of mass 5 kg rests on a horizontal surface (mu = 0.2). What horizontal force is just sufficient to move it? (g = 10 m/s^2)",
     "opts":["5 N","10 N","15 N","20 N"],
     "ans":1,
+    "mark":"Hard",
     "exp":"Limiting friction f_max = mu * N = 0.2 * (5 * 10) = 10 N."
   }
 ],null,2);
@@ -136,6 +138,7 @@ document.getElementById('menuBtn').onclick=()=>document.getElementById('sidebar'
 document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
 
 function navigate(v){
+  clearInterval(quizClockInterval);
   current=v;
   document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
   document.getElementById('sidebar').classList.remove('open');
@@ -162,6 +165,7 @@ function getCountdownParts(){
   };
 }
 function pad2(n){return String(n).padStart(2,'0')}
+function fmtMMSS(sec){return `${pad2(Math.floor(sec/60))}:${pad2(sec%60)}`}
 
 function countdown(){
   const {days,hrs,mins,secs}=getCountdownParts();
@@ -219,12 +223,15 @@ window.editRanks=()=>{
   save();render();toast('Rank targets updated.');
 };
 
-function weakChaptersList(){
+function backlogDueList(){
   const out=[];
   for(const sub of Object.keys(db.chapters)){
     for(const c of db.chapters[sub]){
-      if(c.strength==='Weak'||(c.weakTopics&&c.weakTopics.trim())){
-        out.push({sub,name:c.name,weakTopics:c.weakTopics||''});
+      const revDone=['r1','r2','r3','r4','r5'].filter(k=>c.t&&c.t[k]).length;
+      const isWeak=c.strength==='Weak'||(c.weakTopics&&c.weakTopics.trim());
+      if(isWeak || (c.done && revDone===0)){
+        const reason=isWeak?(c.weakTopics?`Weak: ${c.weakTopics}`:'Weak chapter'):'Completed • Rev 1 pending';
+        out.push({sub,name:c.name,reason});
       }
     }
   }
@@ -235,7 +242,7 @@ function dashboard(){
   title('Dashboard');
   let tasks=todayTasks(),done=tasks.filter(t=>t.done).length,mins=totalMinutes(),qCount=totalQuestionsToday(),openMistakes=db.mistakes.filter(m=>!m.closed).length;
   const curRank=esc(db.settings.currentRank||'4 Lakh'), upRank=esc(db.settings.upcomingRank||'10k');
-  const weakList=weakChaptersList().slice(0,4);
+  const dueList=backlogDueList().slice(0,5);
   return `<div class="hero">
     <div class="hero-row">
       <div>
@@ -286,9 +293,9 @@ function dashboard(){
           <button class="btn secondary" onclick="navigate('vault')">🗂 Study Vault</button>
         </div>
       </div>
-      <div class="section-head"><h2>Weak Radar</h2><small>PRIORITY CHAPTERS</small></div>
+      <div class="section-head"><h2>Revision Due & Weak Backlog</h2><small>PRIORITY QUEUE</small></div>
       <div class="card">
-        ${weakList.length?weakList.map(w=>`<div class="list-item"><div><b>${esc(w.name)}</b><div class="muted">${esc(w.sub)}${w.weakTopics?' • '+esc(w.weakTopics):''}</div></div><span class="tag">WEAK</span></div>`).join(''):'<div class="empty">Mark chapters as Weak in Subject HQ to track priority areas here.</div>'}
+        ${dueList.length?dueList.map(w=>`<div class="list-item"><div><b>${esc(w.name)}</b><div class="muted">${esc(w.sub)} • ${esc(w.reason)}</div></div><span class="tag gold">DUE</span></div>`).join(''):'<div class="empty">No weak or revision-due chapters flagged right now.</div>'}
       </div>
       <div class="section-head"><h2>Recent Activity</h2><small>LATEST RECORDS</small></div>
       <div class="card">${recentActivity()}</div>
@@ -347,7 +354,7 @@ function subjects(){
         <option value="All" ${strengthFilter==='All'?'selected':''}>All Levels (${allList.length})</option>
         <option value="Weak" ${strengthFilter==='Weak'?'selected':''}>🔴 Weak (${weakCount})</option>
         <option value="Medium" ${strengthFilter==='Medium'?'selected':''}>🟡 Medium (${allList.filter(c=>(c.strength||'Medium')==='Medium').length})</option>
-        <option value="Strong" ${strengthFilter==='Strong'?'selected':''}>🟢 Strong (${allList.filter(c=>c.strength==='Strong').length})</option>
+        <option value="Strong" ${strengthFilter==='Strong'?'selected':''}>🟢 Strong (${allList.filter(c=>(c.strength||'Medium')==='Strong').length})</option>
       </select>
       <button type="button" class="btn secondary" style="padding:7px 10px" onclick="loadSyllabus()">⬇ Load NEET chapters</button>
     </div>
@@ -511,14 +518,75 @@ function startTimer(){
   updateTimerDOM();
 }
 
-/* Practice & Quiz Section: Bulk JSON MCQ Quiz + Chapter-Wise Saved Attempts + Mistake Re-Test */
-window.setPracticeTab=t=>{practiceTab=t;render()};
+/* Practice & Quiz Section */
+const MARKS=['Imp','Easy','Medium','Hard'];
+function normalizeMark(val){
+  const raw=String(val||'').trim().toLowerCase();
+  if(raw==='imp' || raw==='important')return 'Imp';
+  if(raw==='easy')return 'Easy';
+  if(raw==='hard')return 'Hard';
+  if(raw==='medium' || raw==='med')return 'Medium';
+  return 'Medium';
+}
+function markBadgeStyle(mk){
+  if(mk==='Imp')return 'background:#5c3d08;color:#ffd369;border-color:#a36d10';
+  if(mk==='Hard')return 'background:#5e141f;color:#ff9aa6;border-color:#b8283e';
+  if(mk==='Easy')return 'background:#12442f;color:#86efac;border-color:#1f7a55';
+  return 'background:#1d2742;color:#93c5fd;border-color:#2d4375';
+}
+
+window.setPracticeTab=t=>{clearInterval(quizClockInterval);practiceTab=t;render()};
 window.setAttemptChapterFilter=ch=>{attemptChapterFilter=ch;render()};
+window.selectQuizSubject=sub=>{selectedQuizSubject=sub;render()};
+window.exitActiveQuiz=()=>{clearInterval(quizClockInterval);activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;render()};
+window.startQuizByChapter=(sub,ch)=>{startSavedQuiz(sub||'All',ch||'All','All')};
+
+function startQuizStopwatch(){
+  clearInterval(quizClockInterval);
+  if(!activeQuiz || quizIdx>=activeQuiz.length)return;
+  quizClockInterval=setInterval(()=>{
+    quizElapsedSec++;
+    const el=document.getElementById('quizLiveClock');
+    if(el)el.textContent=fmtMMSS(quizElapsedSec);
+  },1000);
+}
+
+function getChaptersForSubject(sub){
+  const fromDb=(db.chapters[sub]||[]).map(c=>c.name);
+  const fromSyl=NEET_SYLLABUS[sub]||[];
+  const fromQuiz=(db.quizzes||[]).filter(q=>q.subject===sub).map(q=>q.chapter).filter(Boolean);
+  return [...new Set([...fromDb,...fromSyl,...fromQuiz])];
+}
+
+window.setQuestionMark=(markVal)=>{
+  const norm=normalizeMark(markVal);
+  if(!activeQuiz||!activeQuiz[quizIdx])return;
+  const curQ=activeQuiz[quizIdx];
+  curQ.mark=norm;
+  const bankItem=(db.quizzes||[]).find(x=>x.id===curQ.id || x.q===curQ.q);
+  if(bankItem)bankItem.mark=norm;
+  save();
+  render();
+  toast(`Tagged as ${norm}`);
+};
 
 window.loadSampleJson=()=>{
   const ta=document.getElementById('bulkJsonInput');
   if(ta){ta.value=SAMPLE_JSON;toast('Sample NEET JSON loaded.')}
 };
+
+function beginQuizSession(items,meta){
+  activeQuiz=items.map(x=>({...x,mark:normalizeMark(x.mark||x.tag)}));
+  activeQuizMeta=meta;
+  quizIdx=0;
+  quizScore=0;
+  quizAnswered=false;
+  quizPickedIdx=null;
+  quizWrongList=[];
+  quizElapsedSec=0;
+  practiceTab='quiz';
+  render();
+}
 
 window.importBulkJson=()=>{
   const ta=document.getElementById('bulkJsonInput');
@@ -542,6 +610,7 @@ window.importBulkJson=()=>{
           ansIdx=found>=0?found:0;
         }
       }
+      const mk=normalizeMark(item.mark||item.tag);
       cleaned.push({
         id:crypto.randomUUID(),
         subject:item.subject||'Biology',
@@ -549,6 +618,7 @@ window.importBulkJson=()=>{
         q:String(item.q).trim(),
         opts:item.opts.map(o=>String(o)),
         ans:ansIdx,
+        mark:mk,
         exp:String(item.exp||'').trim()
       });
     }
@@ -557,35 +627,58 @@ window.importBulkJson=()=>{
     db.quizzes.push(...cleaned);
     save();
     const chapters=[...new Set(cleaned.map(x=>x.chapter))];
-    activeQuiz=cleaned;
-    activeQuizMeta={subject:cleaned[0].subject||'Mixed',chapter:chapters.length===1?chapters[0]:'Mixed Chapters'};
-    quizIdx=0;
-    quizScore=0;
-    quizAnswered=false;
-    quizWrongList=[];
-    render();
+    beginQuizSession(cleaned,{subject:cleaned[0].subject||'Mixed',chapter:chapters.length===1?chapters[0]:'Mixed Chapters'});
     toast(`${cleaned.length} MCQs imported & quiz started!`);
   }catch(err){
     toast('Invalid JSON format. Check brackets and commas.');
   }
 };
 
-window.startSavedQuiz=(subFilter='All',chapFilter='All')=>{
-  const pool=(db.quizzes||[]).filter(q=>(subFilter==='All'||q.subject===subFilter)&&(chapFilter==='All'||q.chapter===chapFilter));
-  if(!pool.length){toast('No saved MCQs for this filter.');return}
-  activeQuiz=pool.slice();
-  activeQuizMeta={subject:subFilter,chapter:chapFilter==='All'?'All Chapters':chapFilter};
-  quizIdx=0;
-  quizScore=0;
-  quizAnswered=false;
-  quizWrongList=[];
-  render();
+window.startSavedQuiz=(subFilter='All',chapFilter='All',markFilter='All')=>{
+  const targetMark=markFilter==='All'?'All':normalizeMark(markFilter);
+  const pool=(db.quizzes||[]).filter(q=>{
+    const qMark=normalizeMark(q.mark||q.tag);
+    return (subFilter==='All'||q.subject===subFilter) &&
+           (chapFilter==='All'||q.chapter===chapFilter) &&
+           (targetMark==='All'||qMark===targetMark);
+  });
+  if(!pool.length){toast(`No ${targetMark==='All'?'saved':targetMark} MCQs found for this selection.`);return}
+  const labelChap=chapFilter==='All'?(targetMark==='All'?'All Chapters':`${targetMark} Marked`):chapFilter;
+  beginQuizSession(pool,{subject:subFilter,chapter:labelChap});
+};
+
+window.retryAttemptWrongQuestions=(attemptId)=>{
+  const att=(db.quizAttempts||[]).find(a=>a.id===attemptId);
+  const wrong=att && att.wrongItems ? att.wrongItems : [];
+  if(!wrong.length){toast('No wrong questions in this attempt!');return}
+  const qBank=db.quizzes||[];
+  const rebuilt=wrong.map(w=>{
+    const matched=qBank.find(q=>q.q===w.q);
+    if(matched)return {...matched};
+    const opts=[w.picked,w.correct].filter(Boolean);
+    if(opts.length<2)opts.push('Option A','Option B');
+    const ansIdx=Math.max(0,opts.indexOf(w.correct));
+    return {
+      id:crypto.randomUUID(),
+      subject:att.subject||'Biology',
+      chapter:att.chapter||'Wrong Q Re-Test',
+      q:w.q,
+      opts,
+      ans:ansIdx,
+      mark:normalizeMark(w.mark||'Hard'),
+      exp:w.exp||`True Answer: ${w.correct}`
+    };
+  });
+  beginQuizSession(rebuilt,{subject:att.subject||'Mixed',chapter:`${att.chapter} (Wrong Qs)`});
+  toast(`Starting ${rebuilt.length} missed question(s)!`);
 };
 
 function saveQuizAttemptIfDone(){
+  clearInterval(quizClockInterval);
   if(!activeQuiz||!activeQuiz.length)return;
   const total=activeQuiz.length;
   const acc=Math.round(quizScore/total*100);
+  const avgSec=Math.max(1,Math.round(quizElapsedSec/total));
   db.quizAttempts=db.quizAttempts||[];
   db.quizAttempts.push({
     id:crypto.randomUUID(),
@@ -595,20 +688,26 @@ function saveQuizAttemptIfDone(){
     score:quizScore,
     total,
     accuracy:acc,
+    elapsedSec:quizElapsedSec,
+    avgSec,
+    marksSummary:activeQuiz.map(q=>({q:q.q,mark:normalizeMark(q.mark||q.tag)})),
     wrongItems:quizWrongList.slice()
   });
   save();
-  toast(`Attempt saved under ${activeQuizMeta.chapter}!`);
+  toast(`Attempt saved (${acc}% • ${avgSec}s/Q)!`);
 }
 
 window.answerQuizOpt=(choiceIdx)=>{
   if(quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
   quizAnswered=true;
+  quizPickedIdx=choiceIdx;
   const curQ=activeQuiz[quizIdx];
+  const mk=normalizeMark(curQ.mark||curQ.tag);
   const isCorrect=choiceIdx===curQ.ans;
+  const trueAnsText=curQ.opts[curQ.ans];
   if(isCorrect)quizScore++;
   else{
-    quizWrongList.push({q:curQ.q,picked:curQ.opts[choiceIdx],correct:curQ.opts[curQ.ans],exp:curQ.exp||''});
+    quizWrongList.push({q:curQ.q,picked:curQ.opts[choiceIdx],correct:trueAnsText,mark:mk,exp:curQ.exp||''});
     const exists=db.mistakes.some(m=>!m.closed && m.error.includes(curQ.q.slice(0,45)));
     if(!exists){
       db.mistakes.push({
@@ -617,11 +716,11 @@ window.answerQuizOpt=(choiceIdx)=>{
         subject:curQ.subject||'Biology',
         type:'Concept gap',
         chapter:curQ.chapter||'Quiz Practice',
-        error:`Wrong MCQ: ${curQ.q} (Picked: ${curQ.opts[choiceIdx]})`,
-        fix:curQ.exp||`Correct answer is ${curQ.opts[curQ.ans]}.`
+        error:`Wrong MCQ [${mk}]: ${curQ.q} (Picked: ${curQ.opts[choiceIdx]}) | True Answer: ${trueAnsText}`,
+        fix:curQ.exp?`True Answer: ${trueAnsText}. ${curQ.exp}`:`True Answer: ${trueAnsText}.`
       });
       save();
-      toast('Wrong MCQ auto-added to Mistake Hunter.');
+      toast('Saved to Mistake Hunter with True Answer.');
     }
   }
   if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();
@@ -631,6 +730,7 @@ window.answerQuizOpt=(choiceIdx)=>{
 window.nextQuizQuestion=()=>{
   quizIdx++;
   quizAnswered=false;
+  quizPickedIdx=null;
   render();
 };
 
@@ -668,9 +768,24 @@ function practiceView(){
   const openMistakes=db.mistakes.filter(m=>!m.closed);
   const safeRetestIdx=openMistakes.length?(retestIdx%openMistakes.length):0;
   const curRetest=openMistakes[safeRetestIdx];
-  const quizChapters=[...new Set(qBank.map(q=>q.chapter).filter(Boolean))];
   const attemptChapters=['All',...new Set(attempts.map(a=>a.chapter).filter(Boolean))];
   const filteredAttempts=(attemptChapterFilter==='All'?attempts:attempts.filter(a=>a.chapter===attemptChapterFilter)).slice().reverse();
+
+  const countByMark=(arr,mk)=>arr.filter(q=>normalizeMark(q.mark||q.tag)===mk).length;
+  const impCount=countByMark(qBank,'Imp');
+  const easyCount=countByMark(qBank,'Easy');
+  const medCount=countByMark(qBank,'Medium');
+  const hardCount=countByMark(qBank,'Hard');
+
+  const chapStatsMap={};
+  attempts.forEach(a=>{
+    const ch=a.chapter||'General Practice';
+    if(!chapStatsMap[ch])chapStatsMap[ch]={chapter:ch,subject:a.subject||'Mixed',count:0,totalQ:0,rightQ:0};
+    chapStatsMap[ch].count++;
+    chapStatsMap[ch].totalQ+=(a.total||0);
+    chapStatsMap[ch].rightQ+=(a.score||0);
+  });
+  const chapSummaryList=Object.values(chapStatsMap).map(x=>({...x,acc:x.totalQ?Math.round(x.rightQ/x.totalQ*100):0}));
 
   return `<div class="tabs">
     <button type="button" class="tab ${practiceTab==='quiz'?'active':''}" onclick="setPracticeTab('quiz')">Bulk JSON MCQ Quiz <b>${qBank.length}</b></button>
@@ -681,48 +796,108 @@ function practiceView(){
   ${practiceTab==='quiz'?`
     <div class="two-col">
       <div class="card">
-        <h3>${activeQuiz && quizIdx < activeQuiz.length ? `Active Quiz (${quizIdx+1}/${activeQuiz.length}) • Score: ${quizScore}` : activeQuiz && quizIdx >= activeQuiz.length ? 'Quiz Completed & Saved!' : 'MCQ Quiz Runner'}</h3>
+        <div class="section-head" style="margin-top:0">
+          <h3>${activeQuiz && quizIdx < activeQuiz.length ? `Active Quiz (${quizIdx+1}/${activeQuiz.length}) • Score: ${quizScore}` : activeQuiz && quizIdx >= activeQuiz.length ? 'Quiz Completed & Saved!' : selectedQuizSubject ? `${selectedQuizSubject} — Select Chapter` : 'MCQ Quiz Runner'}</h3>
+          <div class="actions" style="align-items:center">
+            ${activeQuiz && quizIdx < activeQuiz.length ? `<span class="tag gold" style="font-size:11px">⏱ <b id="quizLiveClock">${fmtMMSS(quizElapsedSec)}</b> • ${Math.max(1,Math.round(quizElapsedSec/Math.max(quizIdx+(quizAnswered?1:0),1)))}s/Q</span>` : ''}
+            ${activeQuiz ? `<button type="button" class="btn secondary" style="padding:5px 10px" onclick="exitActiveQuiz()">← Back</button>` : selectedQuizSubject ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="selectQuizSubject(null)">← Back</button>` : ''}
+          </div>
+        </div>
+
         ${activeQuiz && quizIdx < activeQuiz.length ? (()=>{
           const q=activeQuiz[quizIdx];
+          const curMark=normalizeMark(q.mark||q.tag);
           return `<div>
-            <span class="tag blue">${esc(q.subject)} • ${esc(q.chapter)}</span>
+            <div class="actions" style="justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+              <div class="actions" style="gap:6px;align-items:center">
+                <span class="tag blue">${esc(q.subject)} • ${esc(q.chapter)}</span>
+                <span class="tag" style="${markBadgeStyle(curMark)}">TAG: ${esc(curMark)}</span>
+              </div>
+              <div class="actions" style="gap:5px">
+                ${MARKS.map(mk=>`<button type="button" class="btn ${curMark===mk?'':'ghost'}" style="padding:4px 8px;font-size:10px;${curMark===mk?markBadgeStyle(mk):''}" onclick="setQuestionMark('${mk}')">${mk}</button>`).join('')}
+              </div>
+            </div>
             <p style="font-size:13px;font-weight:700;line-height:1.6;margin:10px 0 12px">${esc(q.q)}</p>
             ${q.opts.map((opt,i)=>{
               let cls='opt-btn';
-              if(quizAnswered && i===q.ans)cls+=' correct';
-              return `<button type="button" class="${cls}" ${quizAnswered?'disabled':''} onclick="answerQuizOpt(${i})"><b>${String.fromCharCode(65+i)}.</b> <span>${esc(opt)}</span></button>`;
+              let extraStyle='';
+              if(quizAnswered && i===q.ans){
+                cls+=' correct';
+                extraStyle='background:#103827;border-color:#22c55e;color:#dcfce7';
+              }else if(quizAnswered && i===quizPickedIdx && i!==q.ans){
+                extraStyle='background:#4a1019;border-color:#ef4444;color:#fecaca';
+              }
+              return `<button type="button" class="${cls}" style="${extraStyle}" ${quizAnswered?'disabled':''} onclick="answerQuizOpt(${i})"><b>${String.fromCharCode(65+i)}.</b> <span>${esc(opt)}</span>${quizAnswered && i===q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#86efac">✓ TRUE ANSWER</span>' : quizAnswered && i===quizPickedIdx && i!==q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#fca5a5">✕ WRONG</span>' : ''}</button>`;
             }).join('')}
-            ${quizAnswered?`<div class="ai-reply-box"><b>Correct Answer: ${String.fromCharCode(65+q.ans)}. ${esc(q.opts[q.ans])}</b>\n${esc(q.exp||'Review this concept before moving on.')}</div>
+            ${quizAnswered?`<div class="ai-reply-box" style="${quizPickedIdx!==q.ans?'border-color:#ef4444':''}"><b>True Answer: ${String.fromCharCode(65+q.ans)}. ${esc(q.opts[q.ans])}</b> • Tag: <b>${esc(curMark)}</b>\n${esc(q.exp||'Review this concept before moving on.')}</div>
             <div class="actions" style="margin-top:12px"><button type="button" class="btn" onclick="nextQuizQuestion()">${quizIdx+1<activeQuiz.length?'Next Question →':'Finish & Save Attempt'}</button></div>`:''}
           </div>`;
-        })() : activeQuiz && quizIdx >= activeQuiz.length ? `
-          <div class="card" style="background:#0c0c12;text-align:center;padding:24px">
+        })() : activeQuiz && quizIdx >= activeQuiz.length ? (()=>{
+          const lastAtt=attempts[attempts.length-1];
+          const avgS=lastAtt&&lastAtt.avgSec?lastAtt.avgSec:Math.max(1,Math.round(quizElapsedSec/Math.max(activeQuiz.length,1)));
+          return `<div class="card" style="background:#0c0c12;text-align:center;padding:24px">
             <div class="eyebrow">SAVED UNDER • ${esc(activeQuizMeta.chapter)}</div>
             <div style="font-size:36px;font-weight:800;margin:8px 0">${quizScore} / ${activeQuiz.length}</div>
-            <div class="muted" style="font-size:12px">Accuracy: ${Math.round(quizScore/activeQuiz.length*100)}% • Check "Saved Attempts" tab for chapter history.</div>
+            <div class="muted" style="font-size:12px">Accuracy: ${Math.round(quizScore/activeQuiz.length*100)}% • Time: ${fmtMMSS(quizElapsedSec)} (${avgS}s/Q)</div>
             <div class="actions" style="justify-content:center;margin-top:16px">
-              <button type="button" class="btn" onclick="activeQuiz=null;quizIdx=0;render()">Import New Batch</button>
-              <button type="button" class="btn secondary" onclick="setPracticeTab('attempts')">View Saved Attempts</button>
+              ${quizWrongList.length && lastAtt ? `<button type="button" class="btn" style="background:#8f1e2b" onclick="retryAttemptWrongQuestions('${lastAtt.id}')">↺ Retry ${quizWrongList.length} Wrong Qs</button>` : ''}
+              <button type="button" class="btn secondary" onclick="exitActiveQuiz()">← Back to Quiz Runner</button>
+              <button type="button" class="btn ghost" onclick="setPracticeTab('attempts')">Saved Attempts</button>
             </div>
-          </div>
-        ` : `
-          <div class="empty">Paste JSON MCQs on the right to start immediately, or launch from your saved question bank (${qBank.length} saved).</div>
-          <div class="actions" style="margin-top:8px">
-            <button type="button" class="btn secondary" onclick="startSavedQuiz('All','All')">Start All Saved (${qBank.length})</button>
-            <button type="button" class="btn ghost" onclick="startSavedQuiz('Physics','All')">Physics</button>
-            <button type="button" class="btn ghost" onclick="startSavedQuiz('Chemistry','All')">Chemistry</button>
-            <button type="button" class="btn ghost" onclick="startSavedQuiz('Biology','All')">Biology</button>
-            ${qBank.length?`<button type="button" class="btn danger" onclick="clearSavedQuizzes()">Clear Bank</button>`:''}
-          </div>
-          ${quizChapters.length?`<div style="margin-top:16px"><div class="eyebrow" style="margin-bottom:8px">START BY CHAPTER</div><div class="actions">${quizChapters.map(ch=>`<button type="button" class="btn ghost" style="padding:6px 10px" onclick="startSavedQuiz('All',${JSON.stringify(ch)})">${esc(ch)} (${qBank.filter(x=>x.chapter===ch).length})</button>`).join('')}</div></div>`:''}
-        `}
+          </div>`;
+        })() : selectedQuizSubject ? (()=>{
+          const chList=getChaptersForSubject(selectedQuizSubject);
+          const subBank=qBank.filter(x=>x.subject===selectedQuizSubject);
+          return `<div>
+            <div class="muted" style="margin-bottom:10px">Chapter select karke quiz start karein ya ${esc(selectedQuizSubject)} ke Imp / Hard / Easy / Medium questions filter karein.</div>
+            <div class="actions" style="margin-bottom:14px;flex-wrap:wrap">
+              <button type="button" class="btn" onclick="startSavedQuiz('${selectedQuizSubject}','All','All')">All ${esc(selectedQuizSubject)} (${subBank.length})</button>
+              <button type="button" class="btn secondary" style="${markBadgeStyle('Imp')}" onclick="startSavedQuiz('${selectedQuizSubject}','All','Imp')">Imp (${countByMark(subBank,'Imp')})</button>
+              <button type="button" class="btn secondary" style="${markBadgeStyle('Hard')}" onclick="startSavedQuiz('${selectedQuizSubject}','All','Hard')">Hard (${countByMark(subBank,'Hard')})</button>
+              <button type="button" class="btn secondary" style="${markBadgeStyle('Medium')}" onclick="startSavedQuiz('${selectedQuizSubject}','All','Medium')">Medium (${countByMark(subBank,'Medium')})</button>
+              <button type="button" class="btn secondary" style="${markBadgeStyle('Easy')}" onclick="startSavedQuiz('${selectedQuizSubject}','All','Easy')">Easy (${countByMark(subBank,'Easy')})</button>
+            </div>
+            <div style="max-height:320px;overflow:auto">
+              ${chList.map(ch=>{
+                const cnt=subBank.filter(x=>x.chapter===ch).length;
+                return `<div class="list-item">
+                  <span><b>${esc(ch)}</b> <span class="tag ${cnt?'green':''}">${cnt} Qs ready</span></span>
+                  <button type="button" class="btn ${cnt?'secondary':'ghost'}" style="padding:5px 10px" onclick="startQuizByChapter('${selectedQuizSubject}',${JSON.stringify(ch)})">Start Chapter</button>
+                </div>`;
+              }).join('')}
+            </div>
+          </div>`;
+        })() : (()=>{
+          const bankChapters=[...new Set(qBank.map(q=>q.chapter).filter(Boolean))];
+          return `
+            <div class="empty">Filter by Imp / Hard / Medium / Easy tags, select a subject first to open chapters, or start directly from saved chapters (${qBank.length} MCQs in bank).</div>
+            <div class="actions" style="margin-top:8px;flex-wrap:wrap">
+              <button type="button" class="btn secondary" onclick="startSavedQuiz('All','All','All')">Start All Saved (${qBank.length})</button>
+              <button type="button" class="btn" style="${markBadgeStyle('Imp')}" onclick="startSavedQuiz('All','All','Imp')">Imp (${impCount})</button>
+              <button type="button" class="btn" style="${markBadgeStyle('Hard')}" onclick="startSavedQuiz('All','All','Hard')">Hard (${hardCount})</button>
+              <button type="button" class="btn" style="${markBadgeStyle('Medium')}" onclick="startSavedQuiz('All','All','Medium')">Medium (${medCount})</button>
+              <button type="button" class="btn" style="${markBadgeStyle('Easy')}" onclick="startSavedQuiz('All','All','Easy')">Easy (${easyCount})</button>
+            </div>
+            <div class="actions" style="margin-top:10px;flex-wrap:wrap">
+              <button type="button" class="btn" onclick="selectQuizSubject('Physics')">Physics Chapters →</button>
+              <button type="button" class="btn" onclick="selectQuizSubject('Chemistry')">Chemistry Chapters →</button>
+              <button type="button" class="btn" onclick="selectQuizSubject('Biology')">Biology Chapters →</button>
+              ${qBank.length?`<button type="button" class="btn danger" onclick="clearSavedQuizzes()">Clear Bank</button>`:''}
+            </div>
+            ${bankChapters.length?`<div style="margin-top:14px"><div class="eyebrow" style="margin-bottom:6px">DIRECT CHAPTER SHORTCUTS</div><div class="actions" style="flex-wrap:wrap">${bankChapters.map(ch=>{
+              const cQs=qBank.filter(x=>x.chapter===ch);
+              const cSub=cQs[0]?.subject||'All';
+              return `<button type="button" class="btn ghost" style="padding:5px 9px;font-size:10px" onclick="startQuizByChapter(${JSON.stringify(cSub)},${JSON.stringify(ch)})">${esc(ch)} (${cQs.length})</button>`;
+            }).join('')}</div></div>`:''}
+          `;
+        })()}
       </div>
 
       <div class="card">
         <h3>Bulk JSON Import (No Manual Typing)</h3>
         <div class="field">
-          <label>PASTE MCQ JSON ARRAY</label>
-          <textarea id="bulkJsonInput" class="code-box" placeholder='[{"subject":"Biology","chapter":"Genetics","q":"...","opts":["A","B","C","D"],"ans":0,"exp":"..."}]'></textarea>
+          <label>PASTE MCQ JSON ARRAY (TAG: "Imp" | "Easy" | "Medium" | "Hard")</label>
+          <textarea id="bulkJsonInput" class="code-box" placeholder='[{"subject":"Biology","chapter":"Genetics","q":"...","opts":["A","B","C","D"],"ans":0,"mark":"Imp","exp":"..."}]'></textarea>
         </div>
         <div class="actions">
           <button type="button" class="btn" onclick="importBulkJson()">⚡ Import & Start Quiz</button>
@@ -732,26 +907,46 @@ function practiceView(){
       </div>
     </div>
   ` : practiceTab==='attempts' ? `
-    <div class="card">
-      <div class="section-head" style="margin-top:0">
-        <h3>Chapter-Wise Saved Attempts (${filteredAttempts.length})</h3>
-        <select class="str-select" style="background:#14141d;color:#ddd" onchange="setAttemptChapterFilter(this.value)">
-          ${attemptChapters.map(ch=>`<option value="${esc(ch)}" ${attemptChapterFilter===ch?'selected':''}>${ch==='All'?'All Chapters':ch}</option>`).join('')}
-        </select>
-      </div>
-      ${filteredAttempts.length ? filteredAttempts.map(a=>`
-        <div class="list-item" style="align-items:flex-start">
-          <div>
-            <b>${esc(a.chapter)}</b> <span class="tag blue">${esc(a.subject)}</span> <span class="tag green">${a.score}/${a.total} (${a.accuracy}%)</span>
-            <div class="muted" style="margin-top:4px">Attempted on ${esc(a.date)}</div>
-            ${a.wrongItems && a.wrongItems.length ? `<div style="margin-top:6px;font-size:11px;color:#f2a0a8">Missed ${a.wrongItems.length} Q(s): ${a.wrongItems.map(w=>esc(w.q.slice(0,55))).join(' • ')}</div>`:`<div style="margin-top:5px;font-size:11px;color:#7bd5a9">100% accuracy on attempted questions!</div>`}
-          </div>
-          <div class="actions">
-            ${a.chapter && a.chapter!=='Mixed Chapters' && qBank.some(q=>q.chapter===a.chapter)?`<button type="button" class="btn secondary" style="padding:5px 9px" onclick="startSavedQuiz('All',${JSON.stringify(a.chapter)})">Re-Attempt</button>`:''}
-            <button type="button" class="icon-btn" onclick="deleteAttempt('${a.id}')">×</button>
-          </div>
+    <div class="two-col">
+      <div class="card">
+        <div class="section-head" style="margin-top:0">
+          <h3>Chapter-Wise Saved Attempts (${filteredAttempts.length})</h3>
+          <select class="str-select" style="background:#14141d;color:#ddd" onchange="setAttemptChapterFilter(this.value)">
+            ${attemptChapters.map(ch=>`<option value="${esc(ch)}" ${attemptChapterFilter===ch?'selected':''}>${ch==='All'?'All Chapters':ch}</option>`).join('')}
+          </select>
         </div>
-      `).join('') : '<div class="empty">Complete a quiz to save chapter-wise attempt history here.</div>'}
+        ${filteredAttempts.length ? filteredAttempts.map(a=>{
+          const markCounts={Imp:0,Easy:0,Medium:0,Hard:0};
+          (a.marksSummary||[]).forEach(m=>{const nm=normalizeMark(m.mark||m.tag);if(markCounts[nm]!==undefined)markCounts[nm]++});
+          const markBadges=MARKS.filter(k=>markCounts[k]>0).map(k=>`<span class="tag" style="${markBadgeStyle(k)}">${k}: ${markCounts[k]}</span>`).join(' ');
+          const speedTag=a.avgSec?`<span class="tag blue">⏱ ${a.avgSec}s/Q</span>`:'';
+          return `<div class="list-item" style="align-items:flex-start">
+            <div>
+              <b>${esc(a.chapter)}</b> <span class="tag blue">${esc(a.subject)}</span> <span class="tag green">${a.score}/${a.total} (${a.accuracy}%)</span> ${speedTag} ${markBadges}
+              <div class="muted" style="margin-top:4px">Attempted on ${esc(a.date)}${a.elapsedSec?' • Total '+fmtMMSS(a.elapsedSec):''}</div>
+              ${a.wrongItems && a.wrongItems.length ? `<div style="margin-top:6px;font-size:11px;color:#fca5a5">Missed ${a.wrongItems.length} Q(s): ${a.wrongItems.map(w=>`${esc(w.q.slice(0,48))} → <b>True: ${esc(w.correct)}</b>`).join(' • ')}</div>`:`<div style="margin-top:5px;font-size:11px;color:#86efac">100% accuracy on attempted questions!</div>`}
+            </div>
+            <div class="actions">
+              ${a.wrongItems && a.wrongItems.length ? `<button type="button" class="btn danger" style="padding:5px 9px" onclick="retryAttemptWrongQuestions('${a.id}')">Retry Wrong (${a.wrongItems.length})</button>` : ''}
+              ${a.chapter && a.chapter!=='Mixed Chapters' && qBank.some(q=>q.chapter===a.chapter)?`<button type="button" class="btn secondary" style="padding:5px 9px" onclick="startQuizByChapter(${JSON.stringify(a.subject)},${JSON.stringify(a.chapter)})">Re-Attempt</button>`:''}
+              <button type="button" class="icon-btn" onclick="deleteAttempt('${a.id}')">×</button>
+            </div>
+          </div>`;
+        }).join('') : '<div class="empty">Complete a quiz to save chapter-wise attempt history here.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Chapter-Wise Accuracy Summary</h3>
+        ${chapSummaryList.length ? chapSummaryList.map(cs=>`
+          <div class="list-item" style="flex-direction:column;align-items:stretch;gap:6px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <b>${esc(cs.chapter)}</b>
+              <span class="tag ${cs.acc>=75?'green':'gold'}">${cs.acc}% • ${cs.count} attempt(s)</span>
+            </div>
+            <div class="bar"><span style="width:${cs.acc}%"></span></div>
+          </div>
+        `).join('') : '<div class="empty">Chapter accuracy stats appear once you complete quizzes.</div>'}
+      </div>
     </div>
   ` : `
     <div class="two-col">
@@ -761,7 +956,7 @@ function practiceView(){
           <span class="tag">${esc(curRetest.subject)} • ${esc(curRetest.chapter)} • ${curRetest.date}</span>
           <div style="margin-top:10px;font-size:12px;color:#777682">ERROR LOGGED:</div>
           <p style="font-size:13px;font-weight:700;line-height:1.6;margin:4px 0 12px">${esc(curRetest.error)}</p>
-          ${curRetest.fix?`<div class="ai-reply-box"><b>Your Takeaway / Fix:</b>\n${esc(curRetest.fix)}</div>`:''}
+          ${curRetest.fix?`<div class="ai-reply-box"><b>True Answer & Fix:</b>\n${esc(curRetest.fix)}</div>`:''}
           <div class="actions" style="margin-top:14px">
             <button type="button" class="btn" style="background:#1b6e4d" onclick="retestResult('${curRetest.id}',true)">✓ Solved — Mark Fixed</button>
             <button type="button" class="btn secondary" onclick="retestResult('${curRetest.id}',false)">↺ Still Tricky — Next</button>
@@ -785,12 +980,12 @@ window.buildTutorPrompt=(mode)=>{
   const count=document.getElementById('aiCount')?.value||'10';
   let prompt='';
   if(mode==='json_quiz'){
-    prompt=`Act as a NEET exam question maker for ${sub} (Chapter: "${chap}", Topic: "${topic}"). Create ${count} NCERT-aligned multiple choice questions. Return ONLY a valid JSON array in this exact schema with no extra text:\n[{"subject":"${sub}","chapter":"${chap}","q":"Question text","opts":["Option A","Option B","Option C","Option D"],"ans":0,"exp":"Short clear explanation"}]`;
+    prompt=`Act as a NEET exam question maker for ${sub} (Chapter: "${chap}", Topic: "${topic}"). Create ${count} NCERT-aligned multiple choice questions. Return ONLY a valid JSON array in this exact schema with no extra text:\n[{"subject":"${sub}","chapter":"${chap}","q":"Question text","opts":["Option A","Option B","Option C","Option D"],"ans":0,"mark":"Imp","exp":"Short clear explanation"}]`;
   }else if(mode==='doubt'){
     prompt=`Explain "${topic}" from ${sub} (${chap}) for a NEET aspirant. Keep it crisp, highlight NCERT traps or common formula mistakes, and give 2 quick check questions at the end.`;
   }else{
     const openErrs=db.mistakes.filter(m=>!m.closed).slice(-5).map(m=>`- [${m.subject} - ${m.chapter}] ${m.error}`).join('\n') || '- Focus on NCERT exceptions and numerical speed.';
-    prompt=`Here are my recent NEET mistakes:\n${openErrs}\n\nCreate a focused practice plan and 8 MCQs targeting these exact weak points in JSON format:\n[{"subject":"${sub}","chapter":"${chap}","q":"Question","opts":["A","B","C","D"],"ans":0,"exp":"Why this is right"}]`;
+    prompt=`Here are my recent NEET mistakes:\n${openErrs}\n\nCreate a focused practice plan and 8 MCQs targeting these exact weak points in JSON format:\n[{"subject":"${sub}","chapter":"${chap}","q":"Question","opts":["A","B","C","D"],"ans":0,"mark":"Hard","exp":"Why this is right"}]`;
   }
   const box=document.getElementById('aiPromptBox');
   if(box)box.textContent=prompt;
@@ -834,7 +1029,7 @@ window.runGeminiDirect=async()=>{
 
 function aiTutorView(){
   title('AI Tutor');
-  const defaultPrompt=`Act as a NEET exam question maker for Biology (Chapter: "Cell Cycle", Topic: "Meiosis"). Create 8 NCERT-aligned MCQs. Return ONLY a valid JSON array:\n[{"subject":"Biology","chapter":"Cell Cycle","q":"Question","opts":["A","B","C","D"],"ans":0,"exp":"Explanation"}]`;
+  const defaultPrompt=`Act as a NEET exam question maker for Biology (Chapter: "Cell Cycle", Topic: "Meiosis"). Create 8 NCERT-aligned MCQs. Return ONLY a valid JSON array:\n[{"subject":"Biology","chapter":"Cell Cycle","q":"Question","opts":["A","B","C","D"],"ans":0,"mark":"Imp","exp":"Explanation"}]`;
   return `<div class="two-col">
     <div class="card">
       <h3>NEET Prompt & Quiz Builder</h3>
@@ -875,20 +1070,41 @@ function aiTutorView(){
   </div>`;
 }
 
-/* Mistake Hunter with Image/PDF Attachment */
+/* Mistake Hunter with All-Subject Chapter Dropdown + Image/PDF Attachment */
+window.refreshMistakeChapterOptions=(subVal)=>{
+  const sel=document.getElementById('mistakeChapterSelect');
+  const inp=document.getElementById('mistakeChapterInput');
+  if(!sel)return;
+  const list=getChaptersForSubject(subVal||'Physics');
+  sel.innerHTML=list.map(ch=>`<option value="${esc(ch)}">${esc(ch)}</option>`).join('');
+  if(inp && !inp.value.trim() && list.length)inp.value=list[0];
+};
+
+window.onMistakeChapterPick=(val)=>{
+  const inp=document.getElementById('mistakeChapterInput');
+  if(inp)inp.value=val;
+};
+
 function mistakes(){
   title('Mistake Hunter');
   const mo=db.mistakes.filter(x=>!x.closed),mc=db.mistakes.filter(x=>x.closed),ml=mistakeTab==='open'?mo:mc;
+  const initChapters=getChaptersForSubject('Physics');
   return `<div class="section-head"><h2>Turn errors into insight</h2><small>${db.mistakes.length} RECORDS</small></div>
   <div class="two-col">
     <div class="card">
       <h3>Record a mistake</h3>
       <form id="mistakeForm">
         <div class="form-grid">
-          <div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
+          <div class="field"><label>SUBJECT</label><select name="subject" id="mistakeSubSelect" onchange="refreshMistakeChapterOptions(this.value)"><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
           <div class="field"><label>ERROR TYPE</label><select name="type"><option>Concept gap</option><option>Calculation</option><option>Formula recall</option><option>Misread question</option><option>Memory / NCERT</option><option>Time management</option></select></div>
         </div>
-        <div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="Chapter name"></div>
+        <div class="field">
+          <label>SELECT CHAPTER (ALL SUBJECTS SUPPORTED)</label>
+          <select id="mistakeChapterSelect" onchange="onMistakeChapterPick(this.value)">
+            ${initChapters.map(ch=>`<option value="${esc(ch)}">${esc(ch)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>CHAPTER / TOPIC (SELECTED OR CUSTOM)</label><input name="chapter" id="mistakeChapterInput" value="${esc(initChapters[0]||'')}" required placeholder="Chapter name"></div>
         <div class="field"><label>WHAT WENT WRONG?</label><textarea name="error" required placeholder="Describe the error briefly..."></textarea></div>
         <div class="field"><label>CORRECT APPROACH / TAKEAWAY</label><textarea name="fix" placeholder="What will you remember next time?"></textarea></div>
         <div class="field"><label>ATTACH QUESTION SCREENSHOT / PDF (OPTIONAL)</label><input type="file" name="attachment" accept="image/*,application/pdf"></div>
@@ -898,21 +1114,22 @@ function mistakes(){
     <div class="card">
       <h3>Learning log</h3>
       ${tabsHTML(mistakeTab,mo.length,mc.length,'setMistakeTab')}
-      ${ml.length?ml.slice().reverse().map(m=>`
-        <div class="list-item" style="align-items:flex-start">
+      ${ml.length?ml.slice().reverse().map(m=>{
+        const isWrongMcq=!m.closed && String(m.error||'').includes('Wrong MCQ');
+        return `<div class="list-item" style="align-items:flex-start;${isWrongMcq?'background:#2a0d14;border:1px solid #8f1e2b':''}">
           <div>
-            <b>${esc(m.chapter)}</b>
+            <b>${esc(m.chapter)}</b> ${isWrongMcq?'<span class="tag" style="background:#5e141f;color:#fca5a5;border-color:#ef4444">WRONG MCQ</span>':''}
             <div class="muted" style="margin:4px 0">${esc(m.subject)} • ${esc(m.type)} • ${m.date}</div>
-            <div>${esc(m.error)}</div>
-            ${m.fix?`<div style="color:#8bd5aa;margin-top:5px">Takeaway: ${esc(m.fix)}</div>`:''}
+            <div style="${isWrongMcq?'color:#fecaca;font-weight:600':''}">${esc(m.error)}</div>
+            ${m.fix?`<div style="color:#86efac;margin-top:5px"><b>True Answer / Fix:</b> ${esc(m.fix)}</div>`:''}
             <div class="actions" style="margin-top:8px">
               <button type="button" class="btn ${m.closed?'ghost':'secondary'}" style="padding:6px 10px" onclick="toggleMistake('${m.id}')">${m.closed?'↺ Reopen':'✓ Mark fixed'}</button>
               ${m.fileId?`<button type="button" class="btn ghost" style="padding:6px 10px" onclick="previewFile('${m.fileId}')">📎 View ${m.fileType==='application/pdf'?'PDF':'Screenshot'}</button>`:''}
             </div>
           </div>
           <button type="button" class="icon-btn" onclick="deleteMistake('${m.id}')">×</button>
-        </div>
-      `).join(''):`<div class="empty">${mistakeTab==='open'?'No open mistakes. Add one after your next practice session.':'Nothing closed yet.'}</div>`}
+        </div>`;
+      }).join(''):`<div class="empty">${mistakeTab==='open'?'No open mistakes. Add one after your next practice session.':'Nothing closed yet.'}</div>`}
     </div>
   </div>`;
 }
@@ -1034,6 +1251,7 @@ function render(){
   document.getElementById('view').innerHTML=html;
   bindForms();
   if(current==='dashboard')startLiveCountdown();
+  if(current==='practice' && practiceTab==='quiz' && activeQuiz && quizIdx<activeQuiz.length)startQuizStopwatch();
   if(current==='focus'){
     document.getElementById('startTimer').onclick=startTimer;
     document.getElementById('resetTimer').onclick=resetCurrentTimer;
