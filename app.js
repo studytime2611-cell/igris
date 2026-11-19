@@ -1,4 +1,5 @@
 const KEY='igris-neet-v1';
+const BASE_TITLE='IGRIS — NEET Command Center';
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
 const addDays=(isoDate,days)=>{
   const [y,m,d]=String(isoDate||today()).split('-').map(Number);
@@ -15,12 +16,13 @@ const seed=()=>({
   vault:[],
   quizzes:[],
   quizAttempts:[],
-  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:''}
+  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true}
 });
 
 let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All', selectedQuizSubject=null;
-let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null, quizClockInterval=null;
+let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null, quizClockInterval=null, reminderInterval=null;
 let activeQuiz=null, activeQuizMeta={subject:'All',chapter:'All'}, quizIdx=0, quizScore=0, quizAnswered=false, quizPickedIdx=null, quizWrongList=[], quizElapsedSec=0, retestIdx=0, aiOutput='';
+let topBannerHidden=false, activeReminderTaskId=null;
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -54,6 +56,128 @@ function save(){localStorage.setItem(KEY,JSON.stringify(db));}
 function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function toast(s){let t=document.getElementById('toast');if(!t)return;t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2300)}
 function dateText(d=today()){return new Date(d+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})}
+
+async function requestBrowserNotifyPermission(showToast=true){
+  if(!('Notification' in window)){
+    if(showToast)toast('Browser notifications are not supported here.');
+    return false;
+  }
+  if(Notification.permission==='granted'){
+    db.settings.notifyEnabled=true;
+    save();
+    if(showToast)toast('Top notifications enabled.');
+    return true;
+  }
+  const perm=await Notification.requestPermission();
+  const ok=perm==='granted';
+  db.settings.notifyEnabled=ok;
+  save();
+  if(showToast)toast(ok?'Top notifications enabled!':'Notification permission blocked.');
+  return ok;
+}
+window.requestBrowserNotifyPermission=()=>requestBrowserNotifyPermission(true);
+
+function sendTopNotification(titleText,bodyText,tag='igris-top'){
+  if(!('Notification' in window))return;
+  if(Notification.permission==='granted' && db.settings.notifyEnabled!==false){
+    try{
+      new Notification(titleText,{body:bodyText,tag});
+    }catch(_){}
+  }
+}
+
+function updateTopFocusUI(){
+  const banner=document.getElementById('topFocusBanner');
+  const txtEl=document.getElementById('topFocusText');
+  const activeOrPaused=timerRunning || timerSeconds!==timerInitial;
+  if(banner && txtEl){
+    if(activeOrPaused && !topBannerHidden){
+      banner.hidden=false;
+      txtEl.textContent=`${timerRunning?'FOCUS RUNNING':'FOCUS PAUSED'} • ${fmtMMSS(timerSeconds)} REMAINING`;
+    }else{
+      banner.hidden=true;
+    }
+  }
+  document.title=timerRunning?`⏱ ${fmtMMSS(timerSeconds)} — IGRIS`:BASE_TITLE;
+}
+
+window.hideTopFocusBanner=()=>{
+  topBannerHidden=true;
+  updateTopFocusUI();
+};
+
+function formatReminderLabel(isoLocal){
+  if(!isoLocal)return '';
+  const dt=new Date(isoLocal);
+  if(Number.isNaN(dt.getTime()))return isoLocal;
+  return dt.toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+}
+
+function showReminderAlert(task){
+  activeReminderTaskId=task.id;
+  const bar=document.getElementById('reminderAlertBar');
+  const tEl=document.getElementById('reminderAlertTitle');
+  const bEl=document.getElementById('reminderAlertBody');
+  const openBtn=document.getElementById('reminderOpenBtn');
+  if(bar && tEl && bEl){
+    tEl.textContent=`MISSION REMINDER • ${task.subject||'GENERAL'}`;
+    bEl.textContent=`${task.text} (${formatReminderLabel(task.reminderAt)})`;
+    bar.hidden=false;
+  }
+  if(openBtn){
+    openBtn.onclick=()=>{
+      dismissReminderAlert();
+      navigate('missions');
+    };
+  }
+  toast(`Reminder: ${task.text}`);
+  sendTopNotification(`IGRIS Mission Reminder (${task.subject||'General'})`,task.text,'igris-mission-reminder');
+}
+
+window.dismissReminderAlert=()=>{
+  activeReminderTaskId=null;
+  const bar=document.getElementById('reminderAlertBar');
+  if(bar)bar.hidden=true;
+};
+
+window.clearTaskReminder=(id)=>{
+  const t=db.tasks.find(x=>x.id===id);
+  if(!t)return;
+  delete t.reminderAt;
+  delete t.reminded;
+  save();
+  render();
+  toast('Mission reminder removed.');
+};
+
+window.snoozeTaskReminder=(id,mins=10)=>{
+  const t=db.tasks.find(x=>x.id===id);
+  if(!t)return;
+  const nextDt=new Date(Date.now()+mins*60000);
+  const localIso=`${nextDt.getFullYear()}-${String(nextDt.getMonth()+1).padStart(2,'0')}-${String(nextDt.getDate()).padStart(2,'0')}T${String(nextDt.getHours()).padStart(2,'0')}:${String(nextDt.getMinutes()).padStart(2,'0')}`;
+  t.reminderAt=localIso;
+  t.reminded=false;
+  dismissReminderAlert();
+  save();
+  render();
+  toast(`Snoozed for ${mins} mins.`);
+};
+
+function checkDueReminders(){
+  const now=Date.now();
+  let changed=false;
+  for(const t of db.tasks){
+    if(t.done || !t.reminderAt || t.reminded)continue;
+    const dueMs=new Date(t.reminderAt).getTime();
+    if(!Number.isNaN(dueMs) && dueMs<=now){
+      t.reminded=true;
+      changed=true;
+      showReminderAlert(t);
+      break;
+    }
+  }
+  if(changed)save();
+}
 
 window.toggleZenMode=force=>{
   const next=typeof force==='boolean'?force:!document.body.classList.contains('zen-mode');
@@ -299,7 +423,9 @@ function dashboard(){
 function taskHTML(t){
   const carried=!t.done&&t.date<today();
   const old=carried?`<span class="tag gold">Carried over • ${dateText(t.date)}</span>`:'';
-  return `<label class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span>${old}<small>${esc(t.subject||'GENERAL')}</small><button class="icon-btn" style="padding:3px 7px" onclick="deleteTask('${t.id}')">×</button></label>`;
+  const rem=!t.done&&t.reminderAt?`<span class="reminder-chip">⏰ ${esc(formatReminderLabel(t.reminderAt))}${t.reminded?' • Sent':''}</span>`:'';
+  const remActions=!t.done&&t.reminderAt?`<button type="button" class="icon-btn" style="padding:2px 6px;font-size:10px" title="Snooze 10m" onclick="snoozeTaskReminder('${t.id}',10)">+10m</button><button type="button" class="icon-btn" style="padding:2px 6px;font-size:10px" title="Clear reminder" onclick="clearTaskReminder('${t.id}')">🔕</button>`:'';
+  return `<label class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span>${old}${rem}${remActions}<small>${esc(t.subject||'GENERAL')}</small><button type="button" class="icon-btn" style="padding:3px 7px" onclick="deleteTask('${t.id}')">×</button></label>`;
 }
 function recentActivity(){let items=[...db.sessions.map(x=>({date:x.date,text:`Focus session • ${x.subject} • ${x.minutes} min${x.questions?' • '+x.questions+' Qs':''}`})),...db.tests.map(x=>({date:x.date,text:`Mock test • ${x.name} • ${x.score} marks`})),...(db.quizAttempts||[]).map(x=>({date:x.date,text:`Quiz (${x.chapter}) • ${x.score}/${x.total} (${x.accuracy}%)`})),...allRevs().slice(0,5).map(x=>({date:x.date,text:`Revision • ${x.chapter} (${x.kind})`}))].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);return items.length?items.map(x=>`<div class="list-item"><span>${esc(x.text)}</span><span class="muted">${x.date}</span></div>`).join(''):'<div class="empty">Your activity will appear here as you use IGRIS.</div>'}
 function tabsHTML(cur,open,closed,fn){return `<div class="tabs"><button type="button" class="tab ${cur==='open'?'active':''}" onclick="${fn}('open')">Open <b>${open}</b></button><button type="button" class="tab ${cur==='closed'?'active':''}" onclick="${fn}('closed')">Closed <b>${closed}</b></button></div>`}
@@ -323,16 +449,23 @@ function missions(){
   title('Daily Missions');
   const open=db.tasks.filter(t=>!t.done).sort((a,b)=>a.date.localeCompare(b.date)),closed=db.tasks.filter(t=>t.done).sort((a,b)=>(b.doneAt||b.date).localeCompare(a.doneAt||a.date)),tt=todayTasks(),td=tt.filter(t=>t.done).length,list=missionTab==='open'?open:closed;
   const empty=missionTab==='open'?'No open missions. Add a task to begin.':'No closed missions yet. Complete one to see it here.';
+  const notifyStatus=('Notification' in window)?Notification.permission:'unsupported';
   return `<div class="section-head"><h2>Mission Board</h2><small>${dateText()} • ${td}/${tt.length} TODAY</small></div>
   <div class="two-col">
     <div class="card"><h3>Your missions</h3>${tabsHTML(missionTab,open.length,closed.length,'setMissionTab')}${list.length?list.map(taskHTML).join(''):`<div class="empty">${empty}</div>`}<div style="margin-top:12px">${progress('TODAY’S COMPLETION',td,tt.length)}</div></div>
     <div class="card"><h3>Deploy a new mission</h3>
       <form id="taskForm">
         <div class="field"><label>TASK DESCRIPTION</label><input name="text" placeholder="e.g. Revise NLM notes + 30 MCQs" oninput="onMissionDescInput(this)" required></div>
-        <div class="field"><label>SUBJECT</label><select name="subject" onchange="this.dataset.manual='1'"><option>General</option><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
-        <button class="btn">＋ Add mission</button>
+        <div class="form-grid">
+          <div class="field"><label>SUBJECT</label><select name="subject" onchange="this.dataset.manual='1'"><option>General</option><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
+          <div class="field"><label>REMINDER TIME (OPTIONAL)</label><input type="datetime-local" name="reminderAt"></div>
+        </div>
+        <div class="actions" style="margin-top:4px">
+          <button type="submit" class="btn">＋ Add mission</button>
+          <button type="button" class="btn secondary" onclick="requestBrowserNotifyPermission()">🔔 Top Alert (${esc(notifyStatus)})</button>
+        </div>
       </form>
-      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open missions carry over until you close them.</p>
+      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open missions carry over until you close them. Reminder time set karne par due hone par top banner + browser notification aayegi.</p>
     </div>
   </div>`;
 }
@@ -423,11 +556,13 @@ function timerParts(sec){
 function focus(){
   title('Focus Room');
   const {h,m,s}=timerParts(timerSeconds);
-  return `<div class="section-head"><h2>Deep Work Protocol</h2><small>FLIP TIMER • CLEAN LOG</small></div>
+  const notifyStatus=('Notification' in window)?Notification.permission:'unsupported';
+  return `<div class="section-head"><h2>Deep Work Protocol</h2><small>FLIP TIMER • TOP ALERT</small></div>
   <div class="two-col">
     <div class="card timer-wrap">
       <div class="timer-top-bar">
         <div class="timer-state" id="timerState">${timerRunning?'FOCUS SESSION ACTIVE':'READY WHEN YOU ARE'}</div>
+        <button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="requestBrowserNotifyPermission()">🔔 Alert: ${esc(notifyStatus)}</button>
       </div>
       <div class="timer-flip-wrap">
         <div class="timer-flip-unit"><div class="timer-flip-val" id="tHrs">${h}</div><div class="timer-flip-lbl">HRS</div></div>
@@ -450,7 +585,7 @@ function focus(){
         <input type="number" id="customMinInput" min="1" max="720" placeholder="Custom mins">
         <button type="button" class="btn secondary" onclick="applyCustomTimer()">Set</button>
       </div>
-      <p class="muted" style="font-size:10px;margin-top:10px">Sessions are only saved when a timer finishes OR when you manually click "Save session" on the right.</p>
+      <p class="muted" style="font-size:10px;margin-top:10px">Top bar &amp; browser tab live timer update hote hain, aur session finish hone par top notification bhi aati hai.</p>
     </div>
     <div class="card">
       <h3>Log a completed study session</h3>
@@ -479,10 +614,12 @@ function updateTimerDOM(){
   if(es)es.textContent=s;
   const b1=document.getElementById('startTimer');
   if(b1)b1.textContent=timerRunning?'Pause':'Start focus';
+  updateTopFocusUI();
 }
 window.setTimer=m=>{
   clearInterval(timerInterval);
   timerRunning=false;
+  topBannerHidden=false;
   timerInitial=m*60;
   timerSeconds=m*60;
   render();
@@ -498,7 +635,9 @@ function startTimer(){
   timerRunning=!timerRunning;
   const st=document.getElementById('timerState');
   if(timerRunning){
+    topBannerHidden=false;
     if(st)st.textContent='FOCUS SESSION ACTIVE';
+    sendTopNotification('IGRIS Focus Timer Started',`${fmtMMSS(timerSeconds)} focus session active.`,'igris-focus-timer');
     timerInterval=setInterval(()=>{
       timerSeconds--;
       updateTimerDOM();
@@ -509,6 +648,7 @@ function startTimer(){
         db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,questions:0,topic:'Completed flip timer session'});
         save();
         toast(`Focus complete! ${completedMins} min session logged.`);
+        sendTopNotification('IGRIS Focus Complete!',`${completedMins} min focus session logged.`,'igris-focus-timer');
         render();
       }
     },1000);
@@ -1300,6 +1440,7 @@ function render(){
   let html={dashboard,missions,subjects,focus,practice:practiceView,mistakes,revision,tests,vault,aitutor:aiTutorView,analytics}[current]();
   document.getElementById('view').innerHTML=html;
   bindForms();
+  updateTopFocusUI();
   if(current==='dashboard')startLiveCountdown();
   if(current==='practice' && practiceTab==='quiz' && activeQuiz && quizIdx<activeQuiz.length)startQuizStopwatch();
   if(current==='focus'){
@@ -1313,7 +1454,22 @@ function render(){
 
 function bindForms(){
   const bind=(id,fn)=>{const el=document.getElementById(id);if(el)el.onsubmit=async e=>{e.preventDefault();await fn(el)}};
-  bind('taskForm',f=>{db.tasks.push({id:crypto.randomUUID(),date:today(),text:f.text.value.trim(),subject:f.subject.value,done:false});save();render();toast('Mission added.')});
+  bind('taskForm',f=>{
+    const remVal=(f.reminderAt?.value||'').trim();
+    const taskDate=remVal&&/^\d{4}-\d{2}-\d{2}/.test(remVal)?remVal.slice(0,10):today();
+    db.tasks.push({
+      id:crypto.randomUUID(),
+      date:taskDate,
+      text:f.text.value.trim(),
+      subject:f.subject.value,
+      done:false,
+      ...(remVal?{reminderAt:remVal,reminded:false}:{})
+    });
+    save();
+    checkDueReminders();
+    render();
+    toast(remVal?'Mission & reminder added.':'Mission added.');
+  });
   bind('sessionForm',f=>{
     const mins=parseInt(f.minutes.value,10);
     const qs=parseInt(f.questions?.value,10)||0;
@@ -1365,6 +1521,9 @@ const exportBtnEl=document.getElementById('exportBtn');
 if(exportBtnEl)exportBtnEl.onclick=()=>{let blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`igris-backup-${today()}.json`;a.click();URL.revokeObjectURL(a.href);toast('Backup downloaded.')};
 if(!db.syllabusLoaded&&Object.values(db.chapters).every(a=>!a.length))loadSyllabus(true);
 render();
+checkDueReminders();
+clearInterval(reminderInterval);
+reminderInterval=setInterval(checkDueReminders,15000);
 const importBtnEl=document.getElementById('importBtn');
 const importFileEl=document.getElementById('importFile');
 if(importBtnEl&&importFileEl)importBtnEl.onclick=()=>importFileEl.click();

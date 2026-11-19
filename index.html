@@ -9,6 +9,28 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<div class="top-live-banner" id="topFocusBanner" hidden>
+  <div class="top-live-left">
+    <span class="pulse"></span>
+    <span id="topFocusText">FOCUS TIMER RUNNING</span>
+  </div>
+  <div class="top-live-actions">
+    <button type="button" class="btn secondary" style="padding:4px 9px;font-size:10px" onclick="navigate('focus')">Open Timer</button>
+    <button type="button" class="icon-btn" style="padding:3px 7px;font-size:11px" onclick="hideTopFocusBanner()" title="Hide bar">×</button>
+  </div>
+</div>
+
+<div class="reminder-alert-bar" id="reminderAlertBar" hidden>
+  <div>
+    <b id="reminderAlertTitle">MISSION REMINDER</b>
+    <div id="reminderAlertBody" class="muted"></div>
+  </div>
+  <div class="actions">
+    <button type="button" class="btn" style="padding:6px 10px" id="reminderOpenBtn">Open Missions</button>
+    <button type="button" class="btn secondary" style="padding:6px 10px" onclick="dismissReminderAlert()">Dismiss</button>
+  </div>
+</div>
+
 <div class="app-shell">
   <aside class="sidebar" id="sidebar">
     <div class="brand"><div class="brand-mark">I</div><div><b>IGRIS 💙</b><small>NEET COMMAND CENTER</small></div></div>
