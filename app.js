@@ -8,11 +8,32 @@ const seed=()=>({
   revisions:[],
   tests:[],
   vault:[],
-  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k'}
+  quizzes:[],
+  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:''}
 });
 
-let db=load(), current='dashboard', missionTab='open', mistakeTab='open', trackTab='Physics', strengthFilter='All', vaultFilter='All';
+let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All';
 let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null;
+let activeQuiz=null, quizIdx=0, quizScore=0, quizAnswered=false, retestIdx=0, aiOutput='';
+
+const SAMPLE_JSON=JSON.stringify([
+  {
+    "subject":"Biology",
+    "chapter":"Cell Cycle and Cell Division",
+    "q":"Crossing over takes place between non-sister chromatids of homologous chromosomes during which stage of meiosis I?",
+    "opts":["Leptotene","Pachytene","Diplotene","Diakinesis"],
+    "ans":1,
+    "exp":"Recombination nodules appear during Pachytene where crossing over occurs between non-sister chromatids."
+  },
+  {
+    "subject":"Physics",
+    "chapter":"Laws of Motion",
+    "q":"A block of mass 5 kg rests on a horizontal surface (mu = 0.2). What horizontal force is just sufficient to move it? (g = 10 m/s^2)",
+    "opts":["5 N","10 N","15 N","20 N"],
+    "ans":1,
+    "exp":"Limiting friction f_max = mu * N = 0.2 * (5 * 10) = 10 N."
+  }
+],null,2);
 
 function load(){
   try{
@@ -25,6 +46,34 @@ function save(){localStorage.setItem(KEY,JSON.stringify(db));}
 function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function toast(s){let t=document.getElementById('toast');t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2300)}
 function dateText(d=today()){return new Date(d+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})}
+
+/* Global Zen Mode */
+window.toggleZenMode=force=>{
+  const next=typeof force==='boolean'?force:!document.body.classList.contains('zen-mode');
+  document.body.classList.toggle('zen-mode',next);
+  toast(next?'Full view enabled (Sidebar hidden).':'Sidebar restored.');
+};
+document.getElementById('zenBtn').onclick=()=>toggleZenMode();
+
+/* Dedicated Full-Display Timer Mode */
+window.toggleTimerFullscreen=open=>{
+  const overlay=document.getElementById('timerFullscreen');
+  overlay.classList.toggle('open',open);
+  updateTimerDOM();
+  if(open && document.documentElement.requestFullscreen && !document.fullscreenElement){
+    document.documentElement.requestFullscreen().catch(()=>{});
+  }else if(!open && document.fullscreenElement){
+    document.exitFullscreen().catch(()=>{});
+  }
+};
+window.resetCurrentTimer=()=>setTimer(Math.round(timerInitial/60)||25);
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    if(document.getElementById('timerFullscreen').classList.contains('open'))toggleTimerFullscreen(false);
+    else if(document.body.classList.contains('zen-mode'))toggleZenMode(false);
+  }
+});
 
 /* IndexedDB Helper for Screenshots & PDFs */
 const IDB_NAME='igris-files-db', STORE_NAME='files';
@@ -73,11 +122,7 @@ window.previewFile=async(fileId)=>{
   if(!rec){toast('File not found in local vault.');return}
   document.getElementById('previewTitle').textContent=rec.name;
   const body=document.getElementById('previewBody');
-  if(rec.type==='application/pdf'){
-    body.innerHTML=`<iframe src="${rec.dataUrl}"></iframe>`;
-  }else{
-    body.innerHTML=`<img src="${rec.dataUrl}" alt="${esc(rec.name)}">`;
-  }
+  body.innerHTML=rec.type==='application/pdf'?`<iframe src="${rec.dataUrl}"></iframe>`:`<img src="${rec.dataUrl}" alt="${esc(rec.name)}">`;
   document.getElementById('previewModal').classList.add('open');
 };
 window.closePreview=()=>{
@@ -100,17 +145,20 @@ function stat(label,value,note){return `<div class="stat"><div class="stat-label
 function progress(label,done,total){let p=total?Math.round(done/total*100):0;return `<div class="progress-row"><div class="progress-meta"><span>${label}</span><span>${p}%</span></div><div class="bar"><span style="width:${p}%"></span></div></div>`}
 function todayTasks(){return db.tasks.filter(t=>t.date===today())}
 function totalMinutes(){return db.sessions.filter(s=>s.date===today()).reduce((a,s)=>a+s.minutes,0)}
+function totalQuestionsToday(){return db.sessions.filter(s=>s.date===today()).reduce((a,s)=>a+(s.questions||0),0)}
 function examDate(){return db.settings.examDate||'2027-05-02'}
 
 function getCountdownParts(){
   const [y,m,d]=examDate().split('-').map(Number);
   const target=new Date(y,m-1,d,9,0,0);
   const diff=Math.max(0,target-new Date());
-  const days=Math.floor(diff/864e5);
-  const hrs=Math.floor((diff%864e5)/36e5);
-  const mins=Math.floor((diff%36e5)/6e4);
-  const secs=Math.floor((diff%6e4)/1e3);
-  return {diff,days,hrs,mins,secs};
+  return {
+    diff,
+    days:Math.floor(diff/864e5),
+    hrs:Math.floor((diff%864e5)/36e5),
+    mins:Math.floor((diff%36e5)/6e4),
+    secs:Math.floor((diff%6e4)/1e3)
+  };
 }
 function pad2(n){return String(n).padStart(2,'0')}
 
@@ -170,10 +218,23 @@ window.editRanks=()=>{
   save();render();toast('Rank targets updated.');
 };
 
+function weakChaptersList(){
+  const out=[];
+  for(const sub of Object.keys(db.chapters)){
+    for(const c of db.chapters[sub]){
+      if(c.strength==='Weak'||(c.weakTopics&&c.weakTopics.trim())){
+        out.push({sub,name:c.name,weakTopics:c.weakTopics||''});
+      }
+    }
+  }
+  return out;
+}
+
 function dashboard(){
   title('Dashboard');
-  let tasks=todayTasks(),done=tasks.filter(t=>t.done).length,mins=totalMinutes(),tests=db.tests.length;
+  let tasks=todayTasks(),done=tasks.filter(t=>t.done).length,mins=totalMinutes(),qCount=totalQuestionsToday(),openMistakes=db.mistakes.filter(m=>!m.closed).length;
   const curRank=esc(db.settings.currentRank||'4 Lakh'), upRank=esc(db.settings.upcomingRank||'10k');
+  const weakList=weakChaptersList().slice(0,4);
   return `<div class="hero">
     <div class="hero-row">
       <div>
@@ -198,9 +259,9 @@ function dashboard(){
   ${countdown()}
   <div class="stats">
     ${stat('MISSIONS COMPLETED',`${done}/${tasks.length}`,'Today’s task progress')}
-    ${stat('FOCUS TIME',`${Math.floor(mins/60)}h ${mins%60}m`,'Logged today')}
-    ${stat('MISTAKES TRACKED',db.mistakes.length,'Learning opportunities')}
-    ${stat('MOCK TESTS',tests,'Tests recorded')}
+    ${stat('FOCUS TIME',`${Math.floor(mins/60)}h ${mins%60}m`,`${qCount} Qs logged today`)}
+    ${stat('OPEN MISTAKES',openMistakes,`${db.mistakes.length} total tracked`)}
+    ${stat('SAVED MCQS',(db.quizzes||[]).length,'Ready in Practice')}
   </div>
   <div class="two-col">
     <div>
@@ -219,10 +280,14 @@ function dashboard(){
       <div class="card">
         <div class="actions">
           <button class="btn" onclick="navigate('missions')">＋ Add mission</button>
-          <button class="btn secondary" onclick="navigate('focus')">Start focus</button>
-          <button class="btn secondary" onclick="navigate('mistakes')">Log a mistake</button>
-          <button class="btn secondary" onclick="navigate('vault')">📂 Study Vault</button>
+          <button class="btn secondary" onclick="navigate('practice')">🩺 Practice & Quiz</button>
+          <button class="btn secondary" onclick="navigate('aitutor')">✦ AI Tutor</button>
+          <button class="btn secondary" onclick="navigate('vault')">🗂 Study Vault</button>
         </div>
+      </div>
+      <div class="section-head"><h2>Weak Radar</h2><small>PRIORITY CHAPTERS</small></div>
+      <div class="card">
+        ${weakList.length?weakList.map(w=>`<div class="list-item"><div><b>${esc(w.name)}</b><div class="muted">${esc(w.sub)}${w.weakTopics?' • '+esc(w.weakTopics):''}</div></div><span class="tag">WEAK</span></div>`).join(''):'<div class="empty">Mark chapters as Weak in Subject HQ to track priority areas here.</div>'}
       </div>
       <div class="section-head"><h2>Recent Activity</h2><small>LATEST RECORDS</small></div>
       <div class="card">${recentActivity()}</div>
@@ -231,7 +296,7 @@ function dashboard(){
 }
 
 function taskHTML(t){const old=!t.done&&t.date<today()?`<span class="tag gold">${dateText(t.date)}</span>`:'';return `<label class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span>${old}<small>${esc(t.subject||'GENERAL')}</small><button class="icon-btn" style="padding:3px 7px" onclick="deleteTask('${t.id}')">×</button></label>`}
-function recentActivity(){let items=[...db.sessions.map(x=>({date:x.date,text:`Focus session • ${x.subject} • ${x.minutes} min`})),...db.tests.map(x=>({date:x.date,text:`Mock test • ${x.name} • ${x.score} marks`})),...allRevs().slice(0,5).map(x=>({date:x.date,text:`Revision • ${x.chapter} (${x.kind})`}))].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);return items.length?items.map(x=>`<div class="list-item"><span>${esc(x.text)}</span><span class="muted">${x.date}</span></div>`).join(''):'<div class="empty">Your activity will appear here as you use IGRIS.</div>'}
+function recentActivity(){let items=[...db.sessions.map(x=>({date:x.date,text:`Focus session • ${x.subject} • ${x.minutes} min${x.questions?' • '+x.questions+' Qs':''}`})),...db.tests.map(x=>({date:x.date,text:`Mock test • ${x.name} • ${x.score} marks`})),...allRevs().slice(0,5).map(x=>({date:x.date,text:`Revision • ${x.chapter} (${x.kind})`}))].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);return items.length?items.map(x=>`<div class="list-item"><span>${esc(x.text)}</span><span class="muted">${x.date}</span></div>`).join(''):'<div class="empty">Your activity will appear here as you use IGRIS.</div>'}
 function tabsHTML(cur,open,closed,fn){return `<div class="tabs"><button type="button" class="tab ${cur==='open'?'active':''}" onclick="${fn}('open')">Open <b>${open}</b></button><button type="button" class="tab ${cur==='closed'?'active':''}" onclick="${fn}('closed')">Closed <b>${closed}</b></button></div>`}
 
 function missions(){
@@ -328,7 +393,7 @@ function subjects(){
   </form>`;
 }
 
-/* Focus Room with Flip Clock, Custom Time, and Clean Save Logic */
+/* Focus Room with Flip Clock, Custom Time, Full-Display Mode & Questions Solved Log */
 function timerParts(sec){
   const h=Math.floor(sec/3600);
   const m=Math.floor((sec%3600)/60);
@@ -339,10 +404,13 @@ function timerParts(sec){
 function focus(){
   title('Focus Room');
   const {h,m,s}=timerParts(timerSeconds);
-  return `<div class="section-head"><h2>Deep Work Protocol</h2><small>FLIP TIMER • CUSTOM DURATION • CLEAN LOG</small></div>
+  return `<div class="section-head"><h2>Deep Work Protocol</h2><small>FLIP TIMER • FULL-DISPLAY MODE • CLEAN LOG</small></div>
   <div class="two-col">
     <div class="card timer-wrap">
-      <div class="timer-state" id="timerState">${timerRunning?'FOCUS SESSION ACTIVE':'READY WHEN YOU ARE'}</div>
+      <div class="timer-top-bar">
+        <div class="timer-state" id="timerState">${timerRunning?'FOCUS SESSION ACTIVE':'READY WHEN YOU ARE'}</div>
+        <button type="button" class="btn secondary" style="padding:6px 10px" onclick="toggleTimerFullscreen(true)">⛶ Full Display</button>
+      </div>
       <div class="timer-flip-wrap">
         <div class="timer-flip-unit"><div class="timer-flip-val" id="tHrs">${h}</div><div class="timer-flip-lbl">HRS</div></div>
         <div class="timer-colon">:</div>
@@ -373,11 +441,14 @@ function focus(){
           <div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option><option>Revision</option></select></div>
           <div class="field"><label>DURATION (MINUTES)</label><input name="minutes" type="number" min="1" max="1440" placeholder="e.g. 50" required></div>
         </div>
-        <div class="field"><label>WHAT DID YOU WORK ON?</label><input name="topic" placeholder="e.g. Electrostatics numericals"></div>
+        <div class="form-grid">
+          <div class="field"><label>WHAT DID YOU WORK ON?</label><input name="topic" placeholder="e.g. Electrostatics numericals"></div>
+          <div class="field"><label>MCQS SOLVED (OPTIONAL)</label><input name="questions" type="number" min="0" max="500" placeholder="e.g. 45"></div>
+        </div>
         <button type="submit" class="btn">Save session</button>
       </form>
-      <div class="section-head"><h2>Today's sessions</h2><small>${totalMinutes()} MIN TOTAL</small></div>
-      ${db.sessions.filter(s=>s.date===today()).map(s=>`<div class="list-item"><span>${esc(s.subject)} — ${esc(s.topic||'Study session')}</span><div style="display:flex;align-items:center;gap:8px"><b>${s.minutes}m</b><button type="button" class="icon-btn" style="padding:2px 6px" onclick="removeItem('sessions','${s.id}')">×</button></div></div>`).join('')||'<div class="empty">No sessions logged today.</div>'}
+      <div class="section-head"><h2>Today's sessions</h2><small>${totalMinutes()} MIN • ${totalQuestionsToday()} Qs</small></div>
+      ${db.sessions.filter(s=>s.date===today()).map(s=>`<div class="list-item"><span>${esc(s.subject)} — ${esc(s.topic||'Study session')}${s.questions?` <span class="tag blue">${s.questions} Qs</span>`:''}</span><div style="display:flex;align-items:center;gap:8px"><b>${s.minutes}m</b><button type="button" class="icon-btn" style="padding:2px 6px" onclick="removeItem('sessions','${s.id}')">×</button></div></div>`).join('')||'<div class="empty">No sessions logged today.</div>'}
     </div>
   </div>`;
 }
@@ -388,6 +459,14 @@ function updateTimerDOM(){
   if(eh)eh.textContent=h;
   if(em)em.textContent=m;
   if(es)es.textContent=s;
+  const fh=document.getElementById('fsHrs'),fm=document.getElementById('fsMins'),fs=document.getElementById('fsSecs');
+  if(fh)fh.textContent=h;
+  if(fm)fm.textContent=m;
+  if(fs)fs.textContent=s;
+  const btnText=timerRunning?'Pause':'Start focus';
+  const b1=document.getElementById('startTimer'),b2=document.getElementById('fsStartBtn');
+  if(b1)b1.textContent=btnText;
+  if(b2)b2.textContent=btnText;
 }
 window.setTimer=m=>{
   clearInterval(timerInterval);
@@ -395,6 +474,7 @@ window.setTimer=m=>{
   timerInitial=m*60;
   timerSeconds=m*60;
   render();
+  updateTimerDOM();
 };
 window.applyCustomTimer=()=>{
   const v=parseInt(document.getElementById('customMinInput').value,10);
@@ -404,9 +484,10 @@ window.applyCustomTimer=()=>{
 };
 function startTimer(){
   timerRunning=!timerRunning;
-  const st=document.getElementById('timerState');
+  const st=document.getElementById('timerState'),fst=document.getElementById('fsTimerState');
   if(timerRunning){
     if(st)st.textContent='FOCUS SESSION ACTIVE';
+    if(fst)fst.textContent='DEEP FOCUS ACTIVE';
     timerInterval=setInterval(()=>{
       timerSeconds--;
       updateTimerDOM();
@@ -414,8 +495,9 @@ function startTimer(){
         clearInterval(timerInterval);
         timerRunning=false;
         const completedMins=Math.max(1,Math.round(timerInitial/60));
-        db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,topic:'Completed flip timer session'});
+        db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,questions:0,topic:'Completed flip timer session'});
         save();
+        toggleTimerFullscreen(false);
         toast(`Focus complete! ${completedMins} min session logged.`);
         render();
       }
@@ -423,9 +505,314 @@ function startTimer(){
   }else{
     clearInterval(timerInterval);
     if(st)st.textContent='PAUSED';
+    if(fst)fst.textContent='SESSION PAUSED';
   }
-  let b=document.getElementById('startTimer');
-  if(b)b.textContent=timerRunning?'Pause':'Resume';
+  updateTimerDOM();
+}
+
+/* Practice & Quiz Section: Bulk JSON MCQ Quiz + Mistake Re-Test */
+window.setPracticeTab=t=>{practiceTab=t;render()};
+
+window.loadSampleJson=()=>{
+  const ta=document.getElementById('bulkJsonInput');
+  if(ta){ta.value=SAMPLE_JSON;toast('Sample NEET JSON loaded.')}
+};
+
+window.importBulkJson=()=>{
+  const ta=document.getElementById('bulkJsonInput');
+  if(!ta||!ta.value.trim()){toast('Paste JSON first.');return}
+  try{
+    let raw=ta.value.trim();
+    raw=raw.replace(/^```json\s*/i,'').replace(/^```\s*/i,'').replace(/\s*```$/,'');
+    const arr=JSON.parse(raw);
+    if(!Array.isArray(arr)||!arr.length)throw new Error('Empty');
+    const cleaned=[];
+    for(const item of arr){
+      if(!item.q || !Array.isArray(item.opts) || item.opts.length<2)continue;
+      let ansIdx=0;
+      if(typeof item.ans==='number')ansIdx=Math.max(0,Math.min(item.opts.length-1,item.ans));
+      else if(typeof item.ans==='string'){
+        const letterMap={'A':0,'B':1,'C':2,'D':3};
+        const up=item.ans.trim().toUpperCase();
+        if(up in letterMap)ansIdx=letterMap[up];
+        else{
+          const found=item.opts.findIndex(o=>o.trim().toLowerCase()===item.ans.trim().toLowerCase());
+          ansIdx=found>=0?found:0;
+        }
+      }
+      cleaned.push({
+        id:crypto.randomUUID(),
+        subject:item.subject||'Biology',
+        chapter:item.chapter||'General Practice',
+        q:String(item.q).trim(),
+        opts:item.opts.map(o=>String(o)),
+        ans:ansIdx,
+        exp:String(item.exp||'').trim()
+      });
+    }
+    if(!cleaned.length)throw new Error('No valid MCQs');
+    db.quizzes=db.quizzes||[];
+    db.quizzes.push(...cleaned);
+    save();
+    activeQuiz=cleaned;
+    quizIdx=0;
+    quizScore=0;
+    quizAnswered=false;
+    render();
+    toast(`${cleaned.length} MCQs imported & quiz started!`);
+  }catch(err){
+    toast('Invalid JSON format. Check brackets and commas.');
+  }
+};
+
+window.startSavedQuiz=(subFilter='All')=>{
+  const pool=(db.quizzes||[]).filter(q=>subFilter==='All'||q.subject===subFilter);
+  if(!pool.length){toast('No saved MCQs for this filter.');return}
+  activeQuiz=pool.slice();
+  quizIdx=0;
+  quizScore=0;
+  quizAnswered=false;
+  render();
+};
+
+window.answerQuizOpt=(choiceIdx)=>{
+  if(quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
+  quizAnswered=true;
+  const curQ=activeQuiz[quizIdx];
+  const isCorrect=choiceIdx===curQ.ans;
+  if(isCorrect)quizScore++;
+  else{
+    const exists=db.mistakes.some(m=>!m.closed && m.error.includes(curQ.q.slice(0,45)));
+    if(!exists){
+      db.mistakes.push({
+        id:crypto.randomUUID(),
+        date:today(),
+        subject:curQ.subject||'Biology',
+        type:'Concept gap',
+        chapter:curQ.chapter||'Quiz Practice',
+        error:`Wrong MCQ: ${curQ.q} (Picked: ${curQ.opts[choiceIdx]})`,
+        fix:curQ.exp||`Correct answer is ${curQ.opts[curQ.ans]}.`
+      });
+      save();
+      toast('Wrong MCQ auto-added to Mistake Hunter.');
+    }
+  }
+  render();
+};
+
+window.nextQuizQuestion=()=>{
+  quizIdx++;
+  quizAnswered=false;
+  render();
+};
+
+window.clearSavedQuizzes=()=>{
+  if(!confirm('Delete all imported MCQs?'))return;
+  db.quizzes=[];
+  activeQuiz=null;
+  save();
+  render();
+  toast('Saved MCQs cleared.');
+};
+
+window.retestResult=(mistakeId,passed)=>{
+  const m=db.mistakes.find(x=>x.id===mistakeId);
+  if(m){
+    if(passed){m.closed=true;m.closedAt=today()}
+    save();
+  }
+  retestIdx++;
+  render();
+  toast(passed?'Mistake marked Fixed!':'Kept in Open Mistakes for next round.');
+};
+
+function practiceView(){
+  title('Practice & Quiz');
+  const qBank=db.quizzes||[];
+  const openMistakes=db.mistakes.filter(m=>!m.closed);
+  const safeRetestIdx=openMistakes.length?(retestIdx%openMistakes.length):0;
+  const curRetest=openMistakes[safeRetestIdx];
+
+  return `<div class="tabs">
+    <button type="button" class="tab ${practiceTab==='quiz'?'active':''}" onclick="setPracticeTab('quiz')">Bulk JSON MCQ Quiz <b>${qBank.length}</b></button>
+    <button type="button" class="tab ${practiceTab==='retest'?'active':''}" onclick="setPracticeTab('retest')">Mistake Re-Test <b>${openMistakes.length}</b></button>
+  </div>
+
+  ${practiceTab==='quiz'?`
+    <div class="two-col">
+      <div class="card">
+        <h3>${activeQuiz && quizIdx < activeQuiz.length ? `Active Quiz (${quizIdx+1}/${activeQuiz.length}) • Score: ${quizScore}` : activeQuiz && quizIdx >= activeQuiz.length ? 'Quiz Completed!' : 'MCQ Quiz Runner'}</h3>
+        ${activeQuiz && quizIdx < activeQuiz.length ? (()=>{
+          const q=activeQuiz[quizIdx];
+          return `<div>
+            <span class="tag blue">${esc(q.subject)} • ${esc(q.chapter)}</span>
+            <p style="font-size:13px;font-weight:700;line-height:1.6;margin:10px 0 12px">${esc(q.q)}</p>
+            ${q.opts.map((opt,i)=>{
+              let cls='opt-btn';
+              if(quizAnswered){
+                if(i===q.ans)cls+=' correct';
+                else if(false){}
+              }
+              return `<button type="button" class="${cls}" ${quizAnswered?'disabled':''} onclick="answerQuizOpt(${i})"><b>${String.fromCharCode(65+i)}.</b> <span>${esc(opt)}</span></button>`;
+            }).join('')}
+            ${quizAnswered?`<div class="ai-reply-box"><b>Correct Answer: ${String.fromCharCode(65+q.ans)}. ${esc(q.opts[q.ans])}</b>\n${esc(q.exp||'Review this concept before moving on.')}</div>
+            <div class="actions" style="margin-top:12px"><button type="button" class="btn" onclick="nextQuizQuestion()">${quizIdx+1<activeQuiz.length?'Next Question →':'Finish Quiz'}</button></div>`:''}
+          </div>`;
+        })() : activeQuiz && quizIdx >= activeQuiz.length ? `
+          <div class="card" style="background:#0c0c12;text-align:center;padding:24px">
+            <div class="eyebrow">QUIZ SCORE</div>
+            <div style="font-size:36px;font-weight:800;margin:8px 0">${quizScore} / ${activeQuiz.length}</div>
+            <div class="muted" style="font-size:12px">Accuracy: ${Math.round(quizScore/activeQuiz.length*100)}% • Wrong questions were synced to Mistake Hunter.</div>
+            <div class="actions" style="justify-content:center;margin-top:16px">
+              <button type="button" class="btn" onclick="activeQuiz=null;quizIdx=0;render()">Import New Batch</button>
+              <button type="button" class="btn secondary" onclick="startSavedQuiz('All')">Retry All Saved (${qBank.length})</button>
+            </div>
+          </div>
+        ` : `
+          <div class="empty">Paste JSON MCQs on the right to start immediately, or launch from your saved question bank (${qBank.length} saved).</div>
+          <div class="actions" style="margin-top:8px">
+            <button type="button" class="btn secondary" onclick="startSavedQuiz('All')">Start All Saved (${qBank.length})</button>
+            <button type="button" class="btn ghost" onclick="startSavedQuiz('Physics')">Physics</button>
+            <button type="button" class="btn ghost" onclick="startSavedQuiz('Chemistry')">Chemistry</button>
+            <button type="button" class="btn ghost" onclick="startSavedQuiz('Biology')">Biology</button>
+            ${qBank.length?`<button type="button" class="btn danger" onclick="clearSavedQuizzes()">Clear Bank</button>`:''}
+          </div>
+        `}
+      </div>
+
+      <div class="card">
+        <h3>Bulk JSON Import (No Manual Typing)</h3>
+        <div class="field">
+          <label>PASTE MCQ JSON ARRAY</label>
+          <textarea id="bulkJsonInput" class="code-box" placeholder='[{"subject":"Biology","chapter":"Genetics","q":"...","opts":["A","B","C","D"],"ans":0,"exp":"..."}]'></textarea>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn" onclick="importBulkJson()">⚡ Import & Start Quiz</button>
+          <button type="button" class="btn secondary" onclick="loadSampleJson()">Load Sample JSON</button>
+        </div>
+        <p class="muted" style="font-size:10px;line-height:1.6;margin-top:12px">Tip: PDF ya coaching sheet ko AI Tutor / Gemini / GPT mein dekar JSON banwayein, phir yahan paste karein.</p>
+      </div>
+    </div>
+  ` : `
+    <div class="two-col">
+      <div class="card">
+        <h3>Mistake Re-Test Queue (${openMistakes.length} Open)</h3>
+        ${curRetest ? `
+          <span class="tag">${esc(curRetest.subject)} • ${esc(curRetest.chapter)} • ${curRetest.date}</span>
+          <div style="margin-top:10px;font-size:12px;color:#777682">ERROR LOGGED:</div>
+          <p style="font-size:13px;font-weight:700;line-height:1.6;margin:4px 0 12px">${esc(curRetest.error)}</p>
+          ${curRetest.fix?`<div class="ai-reply-box"><b>Your Takeaway / Fix:</b>\n${esc(curRetest.fix)}</div>`:''}
+          <div class="actions" style="margin-top:14px">
+            <button type="button" class="btn" style="background:#1b6e4d" onclick="retestResult('${curRetest.id}',true)">✓ Solved — Mark Fixed</button>
+            <button type="button" class="btn secondary" onclick="retestResult('${curRetest.id}',false)">↺ Still Tricky — Next</button>
+          </div>
+        ` : '<div class="empty">No open mistakes in Re-Test queue. Great job!</div>'}
+      </div>
+      <div class="card">
+        <h3>Open Mistakes List</h3>
+        ${openMistakes.length?openMistakes.slice().reverse().map(m=>`<div class="list-item"><div><b>${esc(m.chapter)}</b><div class="muted">${esc(m.subject)} • ${esc(m.error.slice(0,75))}</div></div><span class="tag">${esc(m.type)}</span></div>`).join(''):'<div class="empty">All logged mistakes are fixed.</div>'}
+      </div>
+    </div>
+  `}
+  `;
+}
+
+/* AI Tutor Section: One-Click Prompt Builder + Optional Gemini BYOK Runner */
+window.buildTutorPrompt=(mode)=>{
+  const sub=document.getElementById('aiSub')?.value||'Biology';
+  const chap=document.getElementById('aiChap')?.value.trim()||'NCERT Chapter';
+  const topic=document.getElementById('aiTopic')?.value.trim()||'High-yield NEET concepts & PYQs';
+  const count=document.getElementById('aiCount')?.value||'10';
+  let prompt='';
+  if(mode==='json_quiz'){
+    prompt=`Act as a NEET exam question maker for ${sub} (Chapter: "${chap}", Topic: "${topic}"). Create ${count} NCERT-aligned multiple choice questions. Return ONLY a valid JSON array in this exact schema with no extra text:\n[{"subject":"${sub}","chapter":"${chap}","q":"Question text","opts":["Option A","Option B","Option C","Option D"],"ans":0,"exp":"Short clear explanation"}]`;
+  }else if(mode==='doubt'){
+    prompt=`Explain "${topic}" from ${sub} (${chap}) for a NEET aspirant. Keep it crisp, highlight NCERT traps or common formula mistakes, and give 2 quick check questions at the end.`;
+  }else{
+    const openErrs=db.mistakes.filter(m=>!m.closed).slice(-5).map(m=>`- [${m.subject} - ${m.chapter}] ${m.error}`).join('\n') || '- Focus on NCERT exceptions and numerical speed.';
+    prompt=`Here are my recent NEET mistakes:\n${openErrs}\n\nCreate a focused practice plan and 8 MCQs targeting these exact weak points in JSON format:\n[{"subject":"${sub}","chapter":"${chap}","q":"Question","opts":["A","B","C","D"],"ans":0,"exp":"Why this is right"}]`;
+  }
+  const box=document.getElementById('aiPromptBox');
+  if(box)box.textContent=prompt;
+  return prompt;
+};
+
+window.copyTutorPrompt=()=>{
+  const txt=document.getElementById('aiPromptBox')?.textContent||'';
+  if(!txt)return;
+  navigator.clipboard?.writeText(txt).then(()=>toast('Prompt copied! Paste into Gemini, ChatGPT, or Claude.')).catch(()=>toast('Select and copy prompt from box.'));
+};
+
+window.saveGeminiKey=()=>{
+  const inp=document.getElementById('geminiKeyInput');
+  if(!inp)return;
+  db.settings.geminiKey=inp.value.trim();
+  save();
+  toast(db.settings.geminiKey?'Gemini API key saved locally.':'API key cleared.');
+};
+
+window.runGeminiDirect=async()=>{
+  const key=(db.settings.geminiKey||'').trim();
+  const prompt=document.getElementById('aiPromptBox')?.textContent||'';
+  if(!key){toast('Add a Gemini API key first or use Copy Prompt.');return}
+  if(!prompt)return;
+  aiOutput='Thinking...';
+  render();
+  try{
+    const res=await fetch(`[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$){encodeURIComponent(key)}`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({contents:[{parts:[{text:prompt}]}]})
+    });
+    const data=await res.json();
+    aiOutput=data?.candidates?.[0]?.content?.parts?.[0]?.text || data?.error?.message || 'No response received.';
+  }catch(e){
+    aiOutput='Network error while contacting Gemini API. You can still use Copy Prompt with any AI chat.';
+  }
+  render();
+};
+
+function aiTutorView(){
+  title('AI Tutor');
+  const defaultPrompt=`Act as a NEET exam question maker for Biology (Chapter: "Cell Cycle", Topic: "Meiosis"). Create 8 NCERT-aligned MCQs. Return ONLY a valid JSON array:\n[{"subject":"Biology","chapter":"Cell Cycle","q":"Question","opts":["A","B","C","D"],"ans":0,"exp":"Explanation"}]`;
+  return `<div class="two-col">
+    <div class="card">
+      <h3>NEET Prompt & Quiz Builder</h3>
+      <div class="form-grid">
+        <div class="field"><label>SUBJECT</label><select id="aiSub"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div>
+        <div class="field"><label>NO. OF MCQS</label><input id="aiCount" type="number" min="3" max="30" value="10"></div>
+      </div>
+      <div class="field"><label>CHAPTER</label><input id="aiChap" placeholder="e.g. Thermodynamics / Biomolecules"></div>
+      <div class="field"><label>TOPIC / DOUBT / PDF CONTEXT</label><input id="aiTopic" placeholder="e.g. Exceptions, formulas, or paste topic name"></div>
+      <div class="actions" style="margin-top:10px">
+        <button type="button" class="btn" onclick="buildTutorPrompt('json_quiz')">Build Quiz JSON Prompt</button>
+        <button type="button" class="btn secondary" onclick="buildTutorPrompt('doubt')">Build Doubt Prompt</button>
+        <button type="button" class="btn ghost" onclick="buildTutorPrompt('mistake_fix')">Mistake-Based Quiz</button>
+      </div>
+      <div class="field" style="margin-top:14px">
+        <label>GENERATED PROMPT (COPY TO GEMINI / GPT / CLAUDE OR RUN DIRECTLY)</label>
+        <div id="aiPromptBox" class="prompt-preview">${esc(defaultPrompt)}</div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn secondary" onclick="copyTutorPrompt()">📋 Copy Prompt</button>
+        <button type="button" class="btn" onclick="runGeminiDirect()">✦ Ask Gemini (BYOK)</button>
+      </div>
+      ${aiOutput?`<div class="ai-reply-box">${esc(aiOutput)}</div>`:''}
+    </div>
+
+    <div class="card">
+      <h3>Optional Direct API Key (Stored Only in Browser)</h3>
+      <div class="field">
+        <label>GEMINI API KEY (OPTIONAL)</label>
+        <input type="password" id="geminiKeyInput" value="${esc(db.settings.geminiKey||'')}" placeholder="AIza...">
+      </div>
+      <button type="button" class="btn secondary" onclick="saveGeminiKey()">Save Key</button>
+      <p class="muted" style="font-size:10px;line-height:1.65;margin-top:14px">
+        1. Bina API key ke bhi aap <b>Copy Prompt</b> karke Gemini, ChatGPT, ya Claude se JSON MCQ banwa sakte hain.<br>
+        2. Phir us JSON ko <b>Practice & Quiz</b> tab mein paste karte hi turant test shuru ho jayega.
+      </p>
+    </div>
+  </div>`;
 }
 
 /* Mistake Hunter with Image/PDF Attachment */
@@ -477,7 +864,7 @@ window.deleteMistake=async(id)=>{
   save();render();toast('Mistake removed.');
 };
 
-/* New Study Vault Sidebar View for NEET Material, Screenshots & PDFs */
+/* Study Vault Sidebar View */
 window.setVaultFilter=f=>{vaultFilter=f;render()};
 window.deleteVaultItem=async(id)=>{
   const item=(db.vault||[]).find(x=>x.id===id);
@@ -544,13 +931,13 @@ function streak(){const days=new Set([...db.sessions.map(x=>x.date),...db.tasks.
 function analytics(){
   title('Analytics');
   const k7=dayKeys(7),lab=k7.map(dayLabel),focus7=k7.map(k=>db.sessions.filter(x=>x.date===k).reduce((a,x)=>a+x.minutes,0)),closed7=k7.map(k=>db.tasks.filter(t=>t.done&&(t.doneAt||t.date)===k).length);
-  const totMin=db.sessions.reduce((a,x)=>a+x.minutes,0),closedAll=db.tasks.filter(t=>t.done).length,best=db.tests.length?Math.max(...db.tests.map(t=>t.score)):0;
+  const totMin=db.sessions.reduce((a,x)=>a+x.minutes,0),totQ=db.sessions.reduce((a,x)=>a+(x.questions||0),0),closedAll=db.tasks.filter(t=>t.done).length,best=db.tests.length?Math.max(...db.tests.map(t=>t.score)):0;
   const last=db.tests.slice(-10),subs=['Physics','Chemistry','Biology'],subMax={Physics:180,Chemistry:180,Biology:360};
   const subAvg=subs.map(s=>{const arr=db.tests.filter(t=>t[s.toLowerCase()]>0);return{label:s,value:arr.length?Math.round(arr.reduce((a,t)=>a+t[s.toLowerCase()]/subMax[s]*100,0)/arr.length):0}});
   const mSub=subs.map(s=>({label:s,value:db.mistakes.filter(m=>m.subject===s).length}));
   const types=[...new Set(db.mistakes.map(m=>m.type))].map(t=>({label:t,value:db.mistakes.filter(m=>m.type===t).length})).sort((a,b)=>b.value-a.value);
   const fSub=['Physics','Chemistry','Biology'].map(s=>({label:s,value:db.sessions.filter(x=>x.subject===s).reduce((a,x)=>a+x.minutes,0)}));
-  return `<div class="stats">${stat('TOTAL FOCUS',`${Math.floor(totMin/60)}h ${totMin%60}m`,'All time')}${stat('MISSIONS CLOSED',closedAll,'All time')}${stat('STREAK',`${streak()} day${streak()===1?'':'s'}`,'Focus or mission daily')}${stat('BEST SCORE',best,'Out of 720')}</div>
+  return `<div class="stats">${stat('TOTAL FOCUS',`${Math.floor(totMin/60)}h ${totMin%60}m`,`${totQ} total MCQs logged`)}${stat('MISSIONS CLOSED',closedAll,'All time')}${stat('STREAK',`${streak()} day${streak()===1?'':'s'}`,'Focus or mission daily')}${stat('BEST SCORE',best,'Out of 720')}</div>
   <div class="grid2"><div class="card"><h3>Focus minutes — last 7 days</h3>${barChart(lab,focus7,'bar-f2')}</div><div class="card"><h3>Missions closed — last 7 days</h3>${barChart(lab,closed7,'bar-m')}</div></div>
   <div class="grid2" style="margin-top:14px"><div class="card"><h3>Mock test score trend</h3>${last.length?lineChart(last.map((t,i)=>'T'+(db.tests.length-last.length+i+1)),last.map(t=>t.score),720):'<div class="empty">Record a mock test to see your trend.</div>'}</div><div class="card"><h3>Subject-wise mock average (%)</h3>${db.tests.length?hbars(subAvg,'%'):'<div class="empty">Add subject scores in a mock test to see this.</div>'}<h3 style="margin-top:22px">Focus time by subject (min)</h3>${totMin?hbars(fSub):'<div class="empty">Log focus sessions to see this.</div>'}</div></div>
   <div class="grid2" style="margin-top:14px"><div class="card"><h3>Mistakes by subject</h3>${db.mistakes.length?hbars(mSub):'<div class="empty">No mistakes recorded yet.</div>'}</div><div class="card"><h3>Mistakes by type</h3>${types.length?hbars(types):'<div class="empty">No mistakes recorded yet.</div>'}<p class="muted" style="font-size:10px;margin-top:14px">Open: ${db.mistakes.filter(m=>!m.closed).length} • Fixed: ${db.mistakes.filter(m=>m.closed).length}</p></div></div>
@@ -583,13 +970,14 @@ function allRevs(){const out=db.revisions.map(r=>({date:r.date,chapter:r.chapter
 function covg(k,key){const l=tabChapters(TRACK[k]);return l.length?Math.round(l.filter(c=>key==='done'?c.done:(c.t||{})[key]).length/l.length*100):0}
 
 function render(){
-  let html={dashboard,missions,subjects,focus,mistakes,revision,tests,vault,analytics}[current]();
+  let html={dashboard,missions,subjects,focus,practice:practiceView,mistakes,revision,tests,vault,aitutor:aiTutorView,analytics}[current]();
   document.getElementById('view').innerHTML=html;
   bindForms();
   if(current==='dashboard')startLiveCountdown();
   if(current==='focus'){
     document.getElementById('startTimer').onclick=startTimer;
-    document.getElementById('resetTimer').onclick=()=>setTimer(Math.round(timerInitial/60)||25);
+    document.getElementById('resetTimer').onclick=resetCurrentTimer;
+    updateTimerDOM();
   }
 }
 
@@ -598,8 +986,9 @@ function bindForms(){
   bind('taskForm',f=>{db.tasks.push({id:crypto.randomUUID(),date:today(),text:f.text.value.trim(),subject:f.subject.value,done:false});save();render();toast('Mission added.')});
   bind('sessionForm',f=>{
     const mins=parseInt(f.minutes.value,10);
+    const qs=parseInt(f.questions?.value,10)||0;
     if(!mins||mins<1){toast('Enter valid minutes.');return}
-    db.sessions.push({id:crypto.randomUUID(),date:today(),subject:f.subject.value,minutes:mins,topic:f.topic.value.trim()});
+    db.sessions.push({id:crypto.randomUUID(),date:today(),subject:f.subject.value,minutes:mins,questions:qs,topic:f.topic.value.trim()});
     save();render();toast('Study session saved.');
   });
   bind('mistakeForm',async f=>{

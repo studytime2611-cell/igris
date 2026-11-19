@@ -20,10 +20,12 @@
     <button class="nav" data-view="missions">⚔ <span>Daily Missions</span></button>
     <button class="nav" data-view="subjects">▤ <span>Subject HQ</span></button>
     <button class="nav" data-view="focus">◷ <span>Focus Room</span></button>
+    <button class="nav" data-view="practice">🩺 <span>Practice & Quiz</span></button>
     <button class="nav" data-view="mistakes">✧ <span>Mistake Hunter</span></button>
     <button class="nav" data-view="revision">↻ <span>Revision Log</span></button>
     <button class="nav" data-view="tests">▥ <span>Mock Tests</span></button>
     <button class="nav" data-view="vault">🗂 <span>Study Vault</span></button>
+    <button class="nav" data-view="aitutor">✦ <span>AI Tutor</span></button>
     <button class="nav" data-view="analytics">📈 <span>Analytics</span></button>
     <div class="sidebar-bottom">
       <div class="system-status"><span class="pulse"></span> LOCAL SYSTEM ONLINE</div>
@@ -39,6 +41,7 @@
       </div>
       <div class="top-actions">
         <span class="date-chip" id="dateChip"></span>
+        <button class="icon-btn" id="zenBtn" title="Toggle Full-Width / Hide Sidebar">⛶</button>
         <button class="icon-btn" id="importBtn" title="Import backup">⇩</button>
         <button class="icon-btn" id="exportBtn" title="Export backup">⇧</button>
       </div>
@@ -46,6 +49,26 @@
     <section id="view" class="view"></section>
     <footer>IGRIS SYSTEM <span>•</span> Progress over perfection. Keep moving.</footer>
   </main>
+</div>
+
+<!-- Floating Exit Button when Sidebar is Hidden (Zen Mode) -->
+<button type="button" class="zen-exit-btn" id="zenExitBtn" onclick="toggleZenMode(false)">✕ Exit Full View</button>
+
+<!-- Dedicated Full-Screen Timer Overlay -->
+<div class="timer-fullscreen" id="timerFullscreen">
+  <button type="button" class="fs-exit" onclick="toggleTimerFullscreen(false)">✕ Exit Full Display</button>
+  <div class="fs-status" id="fsTimerState">DEEP FOCUS MODE</div>
+  <div class="fs-flip-wrap">
+    <div class="fs-flip-unit"><div class="fs-flip-val" id="fsHrs">00</div><div class="fs-flip-lbl">HOURS</div></div>
+    <div class="fs-colon">:</div>
+    <div class="fs-flip-unit"><div class="fs-flip-val" id="fsMins">25</div><div class="fs-flip-lbl">MINUTES</div></div>
+    <div class="fs-colon">:</div>
+    <div class="fs-flip-unit"><div class="fs-flip-val" id="fsSecs">00</div><div class="fs-flip-lbl">SECONDS</div></div>
+  </div>
+  <div class="actions" style="justify-content:center;gap:14px">
+    <button type="button" class="btn" style="padding:13px 24px;font-size:13px" id="fsStartBtn" onclick="startTimer()">Start focus</button>
+    <button type="button" class="btn secondary" style="padding:13px 20px;font-size:13px" onclick="resetCurrentTimer()">Reset</button>
+  </div>
 </div>
 
 <!-- Preview Modal for Uploaded Screenshots/PDFs -->
