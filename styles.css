@@ -198,3 +198,7 @@ footer span{color:var(--red)}
   .stat-value{font-size:21px}
   .view{padding-top:18px}
 }
+.preview-actions{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:14px}
+.pdf-pages{display:flex;flex-direction:column;align-items:center;gap:10px}
+.pdf-page{width:100%;display:flex;justify-content:center;align-items:center}
+.pdf-page canvas{max-width:100%;border-radius:6px;background:#fff;display:block}

@@ -297,15 +297,112 @@ async function deleteStoredFile(id){
   const tx=idb.transaction(STORE_NAME,'readwrite');
   tx.objectStore(STORE_NAME).delete(id);
 }
+let previewToken=0, previewPdf=null, previewObserver=null;
+async function blobOfRec(rec){return (await fetch(rec.dataUrl)).blob()}
+window.downloadStoredFile=async id=>{
+  const rec=await getStoredFile(id);
+  if(!rec){toast('File not found.');return}
+  const blob=await blobOfRec(rec);
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=rec.name;
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),60000);
+  toast('Download ho gaya — ReadEra / Files se khol lo.');
+};
+window.shareStoredFile=async id=>{
+  const rec=await getStoredFile(id);
+  if(!rec){toast('File not found.');return}
+  try{
+    const blob=await blobOfRec(rec);
+    const file=new File([blob],rec.name,{type:rec.type||blob.type});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:rec.name});return}
+  }catch(e){if(e&&e.name==='AbortError')return}
+  toast('Share sheet nahi mili, download kar raha hoon.');
+  downloadStoredFile(id);
+};
+function loadPdfJs(){
+  if(window.pdfjsLib)return Promise.resolve(window.pdfjsLib);
+  return new Promise((res,rej)=>{
+    const sc=document.createElement('script');
+    sc.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    sc.onload=()=>{
+      if(!window.pdfjsLib){rej(new Error('pdfjs missing'));return}
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      res(window.pdfjsLib);
+    };
+    sc.onerror=()=>rej(new Error('pdfjs load failed'));
+    document.head.appendChild(sc);
+  });
+}
+async function renderPdfInto(container,blob,token){
+  const lib=await loadPdfJs();
+  const buf=await blob.arrayBuffer();
+  const pdf=await lib.getDocument({data:buf}).promise;
+  if(token!==previewToken){try{pdf.destroy()}catch(_){}return}
+  previewPdf=pdf;
+  container.innerHTML='';
+  const width=Math.max(280,Math.min((container.clientWidth||800)-4,1000));
+  const first=await pdf.getPage(1);
+  const v0=first.getViewport({scale:1});
+  const estH=Math.round(width*v0.height/v0.width);
+  if(previewObserver)previewObserver.disconnect();
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  previewObserver=new IntersectionObserver(entries=>{
+    entries.forEach(async en=>{
+      if(!en.isIntersecting)return;
+      const holder=en.target;
+      previewObserver&&previewObserver.unobserve(holder);
+      if(token!==previewToken)return;
+      try{
+        const page=await pdf.getPage(+holder.dataset.n);
+        const sc=width/page.getViewport({scale:1}).width;
+        const vp=page.getViewport({scale:sc*dpr});
+        const cv=document.createElement('canvas');
+        cv.width=vp.width;cv.height=vp.height;
+        cv.style.width=width+'px';cv.style.height=(vp.height/dpr)+'px';
+        await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
+        if(token!==previewToken)return;
+        holder.style.minHeight='';
+        holder.innerHTML='';
+        holder.appendChild(cv);
+      }catch(_){}
+    });
+  },{rootMargin:'800px 0px'});
+  for(let n=1;n<=pdf.numPages;n++){
+    const h=document.createElement('div');
+    h.className='pdf-page';h.dataset.n=n;h.style.minHeight=estH+'px';
+    h.innerHTML=`<span class="muted" style="font-size:10px">Page ${n}</span>`;
+    container.appendChild(h);
+    previewObserver.observe(h);
+  }
+}
 window.previewFile=async(fileId)=>{
   const rec=await getStoredFile(fileId);
   if(!rec){toast('File not found in local vault.');return}
+  const token=++previewToken;
   document.getElementById('previewTitle').textContent=rec.name;
   const body=document.getElementById('previewBody');
-  body.innerHTML=rec.type==='application/pdf'?`<iframe src="${rec.dataUrl}"></iframe>`:`<img src="${rec.dataUrl}" alt="${esc(rec.name)}">`;
+  const isPdf=rec.type==='application/pdf'||/\.pdf$/i.test(rec.name||'');
+  body.innerHTML=`<div class="preview-actions"><button type="button" class="btn" onclick="shareStoredFile('${fileId}')">📤 Open with… (ReadEra / Drive)</button><button type="button" class="btn secondary" onclick="downloadStoredFile('${fileId}')">⬇ Download</button></div>`
+    +(isPdf?'<div id="pdfPages" class="pdf-pages"><div class="muted" style="font-size:11px;padding:20px">PDF load ho rahi hai…</div></div>':`<img src="${rec.dataUrl}" alt="${esc(rec.name)}">`);
   document.getElementById('previewModal').classList.add('open');
+  if(isPdf){
+    try{
+      const blob=await blobOfRec(rec);
+      await renderPdfInto(document.getElementById('pdfPages'),blob,token);
+    }catch(e){
+      if(token===previewToken){
+        const box=document.getElementById('pdfPages');
+        if(box)box.innerHTML='<div class="muted" style="font-size:11px;line-height:1.7;padding:20px">In-app PDF viewer load nahi hua (internet chahiye). Upar <b>Open with…</b> ya <b>Download</b> se ReadEra / Drive me khol lo.</div>';
+      }
+    }
+  }
 };
 window.closePreview=()=>{
+  previewToken++;
+  if(previewObserver){previewObserver.disconnect();previewObserver=null}
+  if(previewPdf){try{previewPdf.destroy()}catch(_){}previewPdf=null}
   document.getElementById('previewModal').classList.remove('open');
   document.getElementById('previewBody').innerHTML='';
 };
@@ -1479,6 +1576,15 @@ window.deleteMistake=async(id)=>{
 };
 
 window.setVaultFilter=f=>{vaultFilter=f;render()};
+window.openVaultLink=id=>{
+  const v=(db.vault||[]).find(x=>x.id===id);
+  if(v&&/^https?:\/\//i.test(v.link||''))window.open(v.link,'_blank','noopener');
+};
+window.openVaultItem=id=>{
+  const v=(db.vault||[]).find(x=>x.id===id);
+  if(!v)return;
+  if(v.fileId)previewFile(v.fileId);else openVaultLink(id);
+};
 window.deleteVaultItem=async(id)=>{
   const item=(db.vault||[]).find(x=>x.id===id);
   if(item&&item.fileId)await deleteStoredFile(item.fileId);
@@ -1504,7 +1610,8 @@ function vault(){
           <div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option><option>Formula / Notes</option></select></div>
           <div class="field"><label>CATEGORY</label><select name="category"><option>Screenshot / Diagram</option><option>Short Notes PDF</option><option>DPP / Question Bank</option><option>NCERT Highlight</option></select></div>
         </div>
-        <div class="field"><label>SELECT IMAGE OR PDF</label><input type="file" name="file" accept="image/*,application/pdf" required></div>
+        <div class="field"><label>SELECT IMAGE OR PDF</label><input type="file" name="file" accept="image/*,application/pdf"></div>
+        <div class="field"><label>OR DRIVE / ONLINE LINK (OPTIONAL)</label><input name="link" type="url" placeholder="https://drive.google.com/..."></div>
         <button type="submit" class="btn">⬆ Save to Study Vault</button>
       </form>
       <p class="muted" style="font-size:10px;line-height:1.6;margin-top:14px">Files are stored offline inside your browser's IndexedDB so large PDFs and screenshots load instantly without slowing down the app.</p>
@@ -1514,15 +1621,15 @@ function vault(){
       ${items.length?`<div class="vault-grid">
         ${items.slice().reverse().map(v=>`
           <div class="vault-card">
-            <div class="vault-thumb" onclick="previewFile('${v.fileId}')">
-              <div class="pdf-badge">${v.fileType==='application/pdf'?'📄 PDF DOCUMENT':'🖼 SCREENSHOT / IMAGE'}<div style="font-size:9px;color:#8f8d99;margin-top:4px;text-align:center">Tap to open</div></div>
+            <div class="vault-thumb" onclick="openVaultItem('${v.id}')">
+              <div class="pdf-badge">${!v.fileId?'🔗 ONLINE LINK (DRIVE)':(v.fileType==='application/pdf'?'📄 PDF DOCUMENT':'🖼 SCREENSHOT / IMAGE')}<div style="font-size:9px;color:#8f8d99;margin-top:4px;text-align:center">Tap to open</div></div>
             </div>
             <div>
               <b style="font-size:12px;display:block">${esc(v.title)}</b>
               <div class="muted" style="font-size:10px;margin-top:3px">${esc(v.subject)} • ${esc(v.category)}</div>
             </div>
             <div class="actions" style="margin-top:auto">
-              <button type="button" class="btn secondary" style="flex:1;padding:6px" onclick="previewFile('${v.fileId}')">Open</button>
+              <button type="button" class="btn secondary" style="flex:1;padding:6px" onclick="openVaultItem('${v.id}')">Open</button>${v.fileId&&v.link?`<button type="button" class="icon-btn" style="padding:5px 9px" title="Open Drive link" onclick="openVaultLink('${v.id}')">🔗</button>`:''}
               <button type="button" class="icon-btn" style="padding:5px 9px" onclick="deleteVaultItem('${v.id}')">×</button>
             </div>
           </div>
@@ -1738,10 +1845,12 @@ function bindForms(){
   });
   bind('vaultForm',async f=>{
     const fileInput=f.file.files[0];
-    if(!fileInput)return;
-    const saved=await storeFile(fileInput);
+    const link=(f.link?.value||'').trim();
+    if(link&&!/^https?:\/\//i.test(link)){toast('Link http:// ya https:// se shuru hona chahiye.');return}
+    if(!fileInput&&!link){toast('File ya link me se kuch to daalo.');return}
+    const saved=fileInput?await storeFile(fileInput):null;
     db.vault=db.vault||[];
-    db.vault.push({id:crypto.randomUUID(),date:today(),title:f.title.value.trim(),subject:f.subject.value,category:f.category.value,fileId:saved.id,fileName:saved.name,fileType:saved.type});
+    db.vault.push({id:crypto.randomUUID(),date:today(),title:f.title.value.trim(),subject:f.subject.value,category:f.category.value,...(saved?{fileId:saved.id,fileName:saved.name,fileType:saved.type}:{}),...(link?{link}:{})});
     save();render();toast('Saved to Study Vault.');
   });
   bind('revisionForm',f=>{
