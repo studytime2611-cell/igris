@@ -1236,20 +1236,29 @@ async function callGemini(prompt){
   const key=(db.settings.geminiKey||'').trim();
   if(!key)throw new Error('NO_KEY');
   if(!prompt)throw new Error('NO_PROMPT');
-  const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key='+encodeURIComponent(key);
-  const res=await fetch(url,{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      contents:[{parts:[{text:prompt}]}],
-      generationConfig:{temperature:0.4,maxOutputTokens:8192}
-    })
-  });
-  const data=await res.json();
-  if(data?.error?.message)throw new Error(data.error.message);
-  const text=data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if(!text)throw new Error('Empty Gemini response');
-  return text;
+  const models=['gemini-3.8-flash','gemini-3.6-flash','gemini-flash-latest'];
+  let lastErr='';
+  for(const m of models){
+    for(let t=0;t<2;t++){
+      try{
+        const url='https://generativelanguage.googleapis.com/v1beta/models/'+m+':generateContent?key='+encodeURIComponent(key);
+        const res=await fetch(url,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            contents:[{parts:[{text:prompt}]}],
+            generationConfig:{temperature:0.4,maxOutputTokens:8192}
+          })
+        });
+        const data=await res.json();
+        if(data?.error?.message){lastErr=data.error.message;await new Promise(r=>setTimeout(r,1500));continue}
+        const text=data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if(text)return text;
+        lastErr='Empty Gemini response';
+      }catch(e){lastErr=String(e.message||e)}
+    }
+  }
+  throw new Error(lastErr||'Gemini failed');
 }
 window.vaultMakeQuiz=async(id)=>{
   const v=(db.vault||[]).find(x=>x.id===id);
