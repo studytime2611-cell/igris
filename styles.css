@@ -12,7 +12,7 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:Manrope,system-
 .sidebar{width:245px;background:#0d0d12;border-right:1px solid var(--line);padding:25px 16px;display:flex;flex-direction:column;flex-shrink:0}
 body.zen-mode .sidebar{display:none}
 .brand{display:flex;align-items:center;gap:12px;padding:0 9px 28px}
-.brand-mark{min-width:54px;height:36px;padding:0 7px;display:grid;place-items:center;background:linear-gradient(145deg,#f04b5a,#781b29);font:800 12px 'DM Mono',monospace;letter-spacing:.2px;border-radius:10px;white-space:nowrap;box-shadow:0 0 14px #e33b4b55;color:#fff}
+.brand-mark{width:39px;height:39px;display:grid;place-items:center;background:linear-gradient(145deg,#f04b5a,#781b29);font-weight:800;font-size:18px;line-height:1;clip-path:polygon(50% 0,100% 22%,87% 83%,50% 100%,13% 83%,0 22%)}
 .brand b{display:block;letter-spacing:2px;font-size:17px}
 .brand small{display:block;color:var(--muted);font:9px 'DM Mono';letter-spacing:1.3px;margin-top:3px}
 .side-label,.eyebrow{font:10px 'DM Mono';letter-spacing:1.7px;color:#777682}

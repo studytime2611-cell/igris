@@ -549,10 +549,10 @@ function dashboard(){
   </div>
   ${countdown()}
   <div class="stats">
+    ${stat('STREAK',streakLabel(),'6h focus or 60% missions daily')}
     ${stat('MISSIONS COMPLETED',`${done}/${tasks.length}`,'Today’s task progress')}
     ${stat('FOCUS TIME',`${Math.floor(mins/60)}h ${mins%60}m`,`${qCount} Qs logged today`)}
     ${stat('OPEN MISTAKES',openMistakes,`${db.mistakes.length} total tracked`)}
-    ${stat('SAVED ATTEMPTS',(db.quizAttempts||[]).length,`${(db.quizzes||[]).length} MCQs in bank`)}
   </div>
   <div class="two-col">
     <div>
