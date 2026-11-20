@@ -1181,41 +1181,47 @@ window.startSkipDrill=(n=15)=>{
   toast(`Skip drill: ${pool.length} Qs • +4 / −1 / 0 skip`);
 };
 
+function parseQuizJsonText(raw){
+  let t=String(raw||'').trim();
+  t=t.replace(/^```json\s*/i,'').replace(/^```\s*/i,'').replace(/\s*```$/,'');
+  const start=t.indexOf('['), end=t.lastIndexOf(']');
+  if(start>=0&&end>start)t=t.slice(start,end+1);
+  const arr=JSON.parse(t);
+  if(!Array.isArray(arr)||!arr.length)throw new Error('Empty');
+  const cleaned=[];
+  for(const item of arr){
+    if(!item.q || !Array.isArray(item.opts) || item.opts.length<2)continue;
+    let ansIdx=0;
+    if(typeof item.ans==='number')ansIdx=Math.max(0,Math.min(item.opts.length-1,item.ans));
+    else if(typeof item.ans==='string'){
+      const letterMap={'A':0,'B':1,'C':2,'D':3};
+      const up=item.ans.trim().toUpperCase();
+      if(up in letterMap)ansIdx=letterMap[up];
+      else{
+        const found=item.opts.findIndex(o=>o.trim().toLowerCase()===item.ans.trim().toLowerCase());
+        ansIdx=found>=0?found:0;
+      }
+    }
+    const mk=normalizeMark(item.mark||item.tag);
+    cleaned.push({
+      id:crypto.randomUUID(),
+      subject:item.subject||'Biology',
+      chapter:item.chapter||'General Practice',
+      q:String(item.q).trim(),
+      opts:item.opts.map(o=>String(o)),
+      ans:ansIdx,
+      mark:mk,
+      exp:String(item.exp||'').trim()
+    });
+  }
+  if(!cleaned.length)throw new Error('No valid MCQs');
+  return cleaned;
+}
 window.importBulkJson=()=>{
   const ta=document.getElementById('bulkJsonInput');
   if(!ta||!ta.value.trim()){toast('Paste JSON first.');return}
   try{
-    let raw=ta.value.trim();
-    raw=raw.replace(/^```json\s*/i,'').replace(/^```\s*/i,'').replace(/\s*```$/,'');
-    const arr=JSON.parse(raw);
-    if(!Array.isArray(arr)||!arr.length)throw new Error('Empty');
-    const cleaned=[];
-    for(const item of arr){
-      if(!item.q || !Array.isArray(item.opts) || item.opts.length<2)continue;
-      let ansIdx=0;
-      if(typeof item.ans==='number')ansIdx=Math.max(0,Math.min(item.opts.length-1,item.ans));
-      else if(typeof item.ans==='string'){
-        const letterMap={'A':0,'B':1,'C':2,'D':3};
-        const up=item.ans.trim().toUpperCase();
-        if(up in letterMap)ansIdx=letterMap[up];
-        else{
-          const found=item.opts.findIndex(o=>o.trim().toLowerCase()===item.ans.trim().toLowerCase());
-          ansIdx=found>=0?found:0;
-        }
-      }
-      const mk=normalizeMark(item.mark||item.tag);
-      cleaned.push({
-        id:crypto.randomUUID(),
-        subject:item.subject||'Biology',
-        chapter:item.chapter||'General Practice',
-        q:String(item.q).trim(),
-        opts:item.opts.map(o=>String(o)),
-        ans:ansIdx,
-        mark:mk,
-        exp:String(item.exp||'').trim()
-      });
-    }
-    if(!cleaned.length)throw new Error('No valid MCQs');
+    const cleaned=parseQuizJsonText(ta.value);
     db.quizzes=db.quizzes||[];
     db.quizzes.push(...cleaned);
     save();
@@ -1224,6 +1230,67 @@ window.importBulkJson=()=>{
     toast(`${cleaned.length} MCQs imported & quiz started!`);
   }catch(err){
     toast('Invalid JSON format. Check brackets and commas.');
+  }
+};
+async function callGemini(prompt){
+  const key=(db.settings.geminiKey||'').trim();
+  if(!key)throw new Error('NO_KEY');
+  if(!prompt)throw new Error('NO_PROMPT');
+  const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+encodeURIComponent(key);
+  const res=await fetch(url,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      contents:[{parts:[{text:prompt}]}],
+      generationConfig:{temperature:0.4,maxOutputTokens:8192}
+    })
+  });
+  const data=await res.json();
+  if(data?.error?.message)throw new Error(data.error.message);
+  const text=data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if(!text)throw new Error('Empty Gemini response');
+  return text;
+}
+window.vaultMakeQuiz=async(id)=>{
+  const v=(db.vault||[]).find(x=>x.id===id);
+  if(!v){toast('Vault item missing.');return}
+  const sub=(v.subject&&v.subject!=='Formula / Notes')?v.subject:'Physics';
+  const chap=(v.chapter||v.title||'General').trim();
+  const topic=`Material: "${v.title}"${v.category?' ('+v.category+')':''}. NCERT + NEET PYQ style from this chapter.`;
+  const prompt=`Act as a NEET exam question maker for ${sub} (Chapter: "${chap}", Topic: "${topic}"). Create 12 NCERT-aligned multiple choice questions. Return ONLY a valid JSON array in this exact schema with no extra text:\n[{"subject":"${sub}","chapter":"${chap}","q":"Question text","opts":["Option A","Option B","Option C","Option D"],"ans":0,"mark":"Imp","exp":"Short clear explanation"}]`;
+  const key=(db.settings.geminiKey||'').trim();
+  if(!key){
+    aiOutput=prompt;
+    navigate('aitutor');
+    setTimeout(()=>{
+      const box=document.getElementById('aiPromptBox');
+      if(box)box.textContent=prompt;
+      navigator.clipboard?.writeText(prompt).catch(()=>{});
+      toast('Key nahi mili — prompt copy ho gaya. AI Tutor mein Gemini key save karo ya GPT mein paste karo.');
+    },80);
+    return;
+  }
+  toast('Gemini se 12 MCQ ban rahe hain…');
+  try{
+    const text=await callGemini(prompt);
+    const cleaned=parseQuizJsonText(text);
+    db.quizzes=db.quizzes||[];
+    db.quizzes.push(...cleaned);
+    save();
+    beginQuizSession(cleaned,{subject:sub,chapter:chap});
+    toast(`${cleaned.length} MCQs Vault se ban ke quiz start!`);
+  }catch(e){
+    const msg=String(e.message||e);
+    if(msg==='NO_KEY')toast('Gemini key AI Tutor mein save karo.');
+    else{
+      aiOutput=prompt+'\n\n--- Gemini error ---\n'+msg;
+      navigate('aitutor');
+      setTimeout(()=>{
+        const box=document.getElementById('aiPromptBox');
+        if(box)box.textContent=prompt;
+        toast('Gemini fail: '+msg.slice(0,80)+' — prompt ready, paste GPT/Claude mein.');
+      },80);
+    }
   }
 };
 
@@ -1680,24 +1747,33 @@ window.saveGeminiKey=()=>{
 };
 
 window.runGeminiDirect=async()=>{
-  const key=(db.settings.geminiKey||'').trim();
   const prompt=document.getElementById('aiPromptBox')?.textContent||'';
-  if(!key){toast('Add a Gemini API key first or use Copy Prompt.');return}
+  if(!(db.settings.geminiKey||'').trim()){toast('Add a Gemini API key first or use Copy Prompt.');return}
   if(!prompt)return;
   aiOutput='Thinking...';
   render();
   try{
-    const res=await fetch(`[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$){encodeURIComponent(key)}`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:[{parts:[{text:prompt}]}]})
-    });
-    const data=await res.json();
-    aiOutput=data?.candidates?.[0]?.content?.parts?.[0]?.text || data?.error?.message || 'No response received.';
+    aiOutput=await callGemini(prompt);
   }catch(e){
-    aiOutput='Network error while contacting Gemini API. You can still use Copy Prompt with any AI chat.';
+    const msg=String(e.message||e);
+    aiOutput=msg==='NO_KEY'
+      ?'Add a Gemini API key (Google AI Studio → free key).'
+      :('Gemini error: '+msg+'\n\nYou can still Copy Prompt into ChatGPT / Claude.');
   }
   render();
+};
+window.importAiOutputAsQuiz=()=>{
+  try{
+    const cleaned=parseQuizJsonText(aiOutput||'');
+    db.quizzes=db.quizzes||[];
+    db.quizzes.push(...cleaned);
+    save();
+    const chapters=[...new Set(cleaned.map(x=>x.chapter))];
+    beginQuizSession(cleaned,{subject:cleaned[0].subject||'Mixed',chapter:chapters.length===1?chapters[0]:'Mixed Chapters'});
+    toast(`${cleaned.length} MCQs from AI → quiz started`);
+  }catch(err){
+    toast('AI output mein valid JSON array nahi mila.');
+  }
 };
 
 function aiTutorView(){
@@ -1723,21 +1799,23 @@ function aiTutorView(){
       </div>
       <div class="actions">
         <button type="button" class="btn secondary" onclick="copyTutorPrompt()">📋 Copy Prompt</button>
-        <button type="button" class="btn" onclick="runGeminiDirect()">✦ Ask Gemini (BYOK)</button>
+        <button type="button" class="btn" onclick="runGeminiDirect()">✦ Ask Gemini</button>
+        ${aiOutput?`<button type="button" class="btn" style="background:#1b6e4d" onclick="importAiOutputAsQuiz()">📥 Import AI → Quiz</button>`:''}
       </div>
       ${aiOutput?`<div class="ai-reply-box">${esc(aiOutput)}</div>`:''}
     </div>
 
     <div class="card">
-      <h3>Optional Direct API Key (Stored Only in Browser)</h3>
+      <h3>Gemini key (sirf is device pe)</h3>
       <div class="field">
-        <label>GEMINI API KEY (OPTIONAL)</label>
-        <input type="password" id="geminiKeyInput" value="${esc(db.settings.geminiKey||'')}" placeholder="AIza...">
+        <label>GEMINI API KEY</label>
+        <input type="password" id="geminiKeyInput" value="${esc(db.settings.geminiKey||'')}" placeholder="AIza... from Google AI Studio">
       </div>
       <button type="button" class="btn secondary" onclick="saveGeminiKey()">Save Key</button>
       <p class="muted" style="font-size:10px;line-height:1.65;margin-top:14px">
-        1. Bina API key ke bhi aap <b>Copy Prompt</b> karke Gemini, ChatGPT, ya Claude se JSON MCQ banwa sakte hain.<br>
-        2. Phir us JSON ko <b>Practice & Quiz</b> tab mein paste karte hi turant test shuru ho jayega.
+        Free key: <b>aistudio.google.com</b> → Get API key → yahan paste → Save.<br>
+        Key kabhi code/GitHub mein share mat karna. Vault card pe <b>⚡ Quiz</b> ab isi key se MCQ bana sakta hai.<br>
+        Bina key ke: Copy Prompt → ChatGPT/Gemini web → JSON → Practice paste, ya yahan Import AI → Quiz.
       </p>
     </div>
   </div>`;
@@ -1861,8 +1939,10 @@ function vaultCardHTML(v){
               <b style="font-size:12px;display:block">${esc(v.title)}</b>
               <div class="muted" style="font-size:10px;margin-top:3px">${esc(v.subject)}${v.chapter?' • '+esc(v.chapter):''} • ${esc(v.category)}</div>
             </div>
-            <div class="actions" style="margin-top:auto">
-              <button type="button" class="btn secondary" style="flex:1;padding:6px" onclick="openVaultItem('${v.id}')">Open</button>${v.fileId&&v.link?`<button type="button" class="icon-btn" style="padding:5px 9px" title="Open Drive link" onclick="openVaultLink('${v.id}')">🔗</button>`:''}
+            <div class="actions" style="margin-top:auto;flex-wrap:wrap">
+              <button type="button" class="btn secondary" style="flex:1;padding:6px" onclick="openVaultItem('${v.id}')">Open</button>
+              <button type="button" class="btn" style="flex:1;padding:6px" onclick="vaultMakeQuiz('${v.id}')">⚡ Quiz</button>
+              ${v.fileId&&v.link?`<button type="button" class="icon-btn" style="padding:5px 9px" title="Open Drive link" onclick="openVaultLink('${v.id}')">🔗</button>`:''}
               <button type="button" class="icon-btn" style="padding:5px 9px" onclick="deleteVaultItem('${v.id}')">×</button>
             </div>
           </div>
