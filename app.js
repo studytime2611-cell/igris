@@ -29,6 +29,7 @@ let timerEndAt=0, timerLabel='', wakeLock=null, ongoingNotifLast=0;
 let timerMissionId=null, missionRanSecs=0, runStartedAt=0, missionSessionId=null, lastMissionFlush=0;
 let vaultChapterFilter='All', mistakeOpenGroups=new Set(), activeQuizKey=null, activeQuizArgs=null;
 let mockLabFix=8, mockLabFocusId=null;
+let skipDrill=false, drillNet=0, drillForced=0, drillRight=0, drillWrong=0, drillSkip=0;
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -200,6 +201,19 @@ function checkDueReminders(){
       showReminderAlert(t);
       break;
     }
+  }
+  const dueRev=typeof dueRevisionsList==='function'?dueRevisionsList():[];
+  if(dueRev.length && db.settings.lastRevAlert!==today()){
+    db.settings.lastRevAlert=today();
+    changed=true;
+    const first=dueRev[0];
+    showReminderAlert({
+      id:'rev-'+first.id,
+      subject:first.subject||'Revision',
+      text:`Spaced revision due: ${first.chapter} (+${dueRev.length>1?(dueRev.length-1)+' more':''})`,
+      reminderAt:today()
+    });
+    sendTopNotification('IGRIS Revision Due',`${dueRev.length} chapter(s) need spaced revision`,'igris-revision',{requireInteraction:true});
   }
   if(changed)save();
 }
@@ -579,6 +593,7 @@ function dashboard(){
       <div class="section-head"><h2>Revision Due & Weak Backlog</h2><small>PRIORITY QUEUE</small></div>
       <div class="card">
         ${dueList.length?dueList.map(w=>`<div class="list-item"><div><b>${esc(w.name)}</b><div class="muted">${esc(w.sub)} • ${esc(w.reason)}</div></div><span class="tag gold">DUE</span></div>`).join(''):'<div class="empty">No weak or revision-due chapters flagged right now.</div>'}
+        ${dueList.length?`<div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="generateWeakMissions()">＋ Auto missions from weak chapters</button></div>`:''}
       </div>
       <div class="section-head"><h2>Recent Activity</h2><small>LATEST RECORDS</small></div>
       <div class="card">${recentActivity()}</div>
@@ -731,10 +746,40 @@ function missions(){
           <button type="button" class="btn secondary" onclick="requestBrowserNotifyPermission()">🔔 Top Alert (${esc(notifyStatus)})</button>
         </div>
       </form>
-      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open aur Closed dono lists Physics, Chemistry aur Biology mein banti hain — har subject ke andar Practice, Revision aur Lecture ke alag blocks hain.</p>
+      <div class="actions" style="margin-top:12px">
+        <button type="button" class="btn secondary" onclick="generateWeakMissions()">⚔ Weak chapters → missions</button>
+      </div>
+      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open aur Closed dono lists Physics, Chemistry aur Biology mein banti hain — har subject ke andar Practice, Revision aur Lecture ke alag blocks hain. Weak-auto missions Subject HQ ke soft chapters se aate hain.</p>
     </div>
   </div>`;
 }
+
+window.generateWeakMissions=()=>{
+  const weak=backlogDueList().slice(0,5);
+  if(!weak.length){toast('No weak / rev-pending chapters found.');return}
+  let n=0;
+  for(const w of weak){
+    const text=`${w.name}: 20 MCQ + short revision`;
+    const exists=db.tasks.some(t=>!t.done&&t.date===today()&&String(t.text||'').includes(w.name));
+    if(exists)continue;
+    db.tasks.push({
+      id:crypto.randomUUID(),
+      date:today(),
+      text,
+      subject:w.sub||'General',
+      missionType:'Practice',
+      done:false,
+      focusMins:45,
+      source:'weak-auto'
+    });
+    n++;
+  }
+  save();
+  missionTab='open';
+  render();
+  toast(n?`${n} weak-chapter mission(s) added for today.`:'Already queued for today.');
+  if(n)navigate('missions');
+};
 
 function branchOf(c){if(c.branch)return c.branch;const i=NEET_SYLLABUS.Chemistry.findIndex(n=>n.toLowerCase()===c.name.trim().toLowerCase());return i<0||i<8?'Physical':i<12?'Inorganic':'Organic'}
 function tabChapters(cfg){return(db.chapters[cfg.sub]||[]).filter(c=>!cfg.branch||branchOf(c)===cfg.branch)}
@@ -1049,7 +1094,7 @@ function markBadgeStyle(mk){
 window.setPracticeTab=t=>{clearInterval(quizClockInterval);practiceTab=t;render()};
 window.setAttemptChapterFilter=ch=>{attemptChapterFilter=ch;render()};
 window.selectQuizSubject=sub=>{selectedQuizSubject=sub;render()};
-window.exitActiveQuiz=()=>{clearInterval(quizClockInterval);saveQuizProgress();activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;render()};
+window.exitActiveQuiz=()=>{clearInterval(quizClockInterval);saveQuizProgress();activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;skipDrill=false;render()};
 window.launchChapterBtn=btn=>{
   const sub=btn?.dataset?.sub||'All';
   const chap=btn?.dataset?.chap||'All';
@@ -1116,16 +1161,25 @@ function beginQuizSession(items,meta,key=null,args=null){
   activeQuizKey=key;
   activeQuizArgs=args;
   activeQuiz=items.map(x=>({...x,mark:normalizeMark(x.mark||x.tag)}));
-  activeQuizMeta=meta;
+  activeQuizMeta=meta||{};
   quizIdx=0;
   quizScore=0;
   quizAnswered=false;
   quizPickedIdx=null;
   quizWrongList=[];
   quizElapsedSec=0;
+  skipDrill=!!(meta&&meta.skipDrill);
+  drillNet=0;drillForced=0;drillRight=0;drillWrong=0;drillSkip=0;
   practiceTab='quiz';
   render();
 }
+window.startSkipDrill=(n=15)=>{
+  const bank=db.quizzes||[];
+  if(bank.length<3){toast('Pehle Practice tab se kam se kam 3 MCQ import karo.');return}
+  const pool=[...bank].sort(()=>Math.random()-0.5).slice(0,Math.min(n,bank.length));
+  beginQuizSession(pool,{subject:'Mixed',chapter:'NEET Skip Drill',skipDrill:true});
+  toast(`Skip drill: ${pool.length} Qs • +4 / −1 / 0 skip`);
+};
 
 window.importBulkJson=()=>{
   const ta=document.getElementById('bulkJsonInput');
@@ -1268,8 +1322,11 @@ window.answerQuizOpt=(choiceIdx)=>{
   const mk=normalizeMark(curQ.mark||curQ.tag);
   const isCorrect=choiceIdx===curQ.ans;
   const trueAnsText=curQ.opts[curQ.ans];
-  if(isCorrect)quizScore++;
-  else{
+  if(isCorrect){
+    quizScore++;
+    if(skipDrill){drillNet+=4;drillForced+=4;drillRight++}
+  }else{
+    if(skipDrill){drillNet-=1;drillForced-=1;drillWrong++}
     quizWrongList.push({q:curQ.q,picked:curQ.opts[choiceIdx],correct:trueAnsText,mark:mk,exp:curQ.exp||''});
     const exists=db.mistakes.some(m=>!m.closed && m.error.includes(curQ.q.slice(0,45)));
     if(!exists){
@@ -1277,7 +1334,7 @@ window.answerQuizOpt=(choiceIdx)=>{
         id:crypto.randomUUID(),
         date:today(),
         subject:curQ.subject||'Biology',
-        type:'Concept gap',
+        type:skipDrill?'Time management':'Concept gap',
         chapter:curQ.chapter||'Quiz Practice',
         error:`Wrong MCQ [${mk}]: ${curQ.q} (Picked: ${curQ.opts[choiceIdx]}) | True Answer: ${trueAnsText}`,
         fix:curQ.exp?`True Answer: ${trueAnsText}. ${curQ.exp}`:`True Answer: ${trueAnsText}.`
@@ -1286,6 +1343,16 @@ window.answerQuizOpt=(choiceIdx)=>{
       toast('Saved to Mistake Hunter with True Answer.');
     }
   }
+  if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();else saveQuizProgress();
+  render();
+};
+window.skipQuizQuestion=()=>{
+  if(!skipDrill||quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
+  quizAnswered=true;
+  quizPickedIdx=-1;
+  drillSkip++;
+  // Forced-attempt baseline assumes a wrong guess (−1) when you wisely skip
+  drillForced-=1;
   if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();else saveQuizProgress();
   render();
 };
@@ -1318,12 +1385,34 @@ window.clearSavedQuizzes=()=>{
 window.retestResult=(mistakeId,passed)=>{
   const m=db.mistakes.find(x=>x.id===mistakeId);
   if(m){
-    if(passed){m.closed=true;m.closedAt=today()}
+    m.fixStreak=m.fixStreak||0;
+    if(passed){
+      m.fixStreak++;
+      if(m.fixStreak>=2){
+        m.closed=true;
+        m.closedAt=today();
+        toast('2 clears in a row — mistake closed.');
+      }else{
+        toast('1 more clear needed before it closes (fix loop).');
+      }
+    }else{
+      m.fixStreak=0;
+      toast('Still open. Loop resets — try again after a short revision.');
+    }
     save();
   }
   retestIdx++;
   render();
-  toast(passed?'Mistake marked Fixed!':'Kept in Open Mistakes for next round.');
+};
+
+window.focusMistakeRetest=(id)=>{
+  const open=db.mistakes.filter(x=>!x.closed);
+  const i=open.findIndex(x=>x.id===id);
+  if(i<0){toast('Mistake already closed or missing.');return}
+  retestIdx=i;
+  practiceTab='retest';
+  navigate('practice');
+  toast('Fix loop opened for this mistake.');
 };
 
 function practiceView(){
@@ -1356,13 +1445,27 @@ function practiceView(){
     <button type="button" class="tab ${practiceTab==='quiz'?'active':''}" onclick="setPracticeTab('quiz')">Bulk JSON MCQ Quiz <b>${qBank.length}</b></button>
     <button type="button" class="tab ${practiceTab==='attempts'?'active':''}" onclick="setPracticeTab('attempts')">Saved Attempts <b>${attempts.length}</b></button>
     <button type="button" class="tab ${practiceTab==='retest'?'active':''}" onclick="setPracticeTab('retest')">Mistake Re-Test <b>${openMistakes.length}</b></button>
+    <button type="button" class="tab ${practiceTab==='skipdrill'?'active':''}" onclick="setPracticeTab('skipdrill')">Skip Drill</button>
   </div>
 
-  ${practiceTab==='quiz'?`
+  ${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
+    <div class="card">
+      <h3>Negative marking drill (+4 / −1 / skip 0)</h3>
+      <p class="muted" style="font-size:12px;line-height:1.7;max-width:560px">NEET mein har galat jawab −1. 50/50 pe attempt karna aksar score khaata hai. Is drill mein Skip allowed hai — end pe net marks vs “forced attempt” baseline dikhega.</p>
+      <div class="actions" style="margin-top:12px">
+        <button type="button" class="btn" onclick="startSkipDrill(10)">Start 10 Q</button>
+        <button type="button" class="btn secondary" onclick="startSkipDrill(15)">15 Q</button>
+        <button type="button" class="btn secondary" onclick="startSkipDrill(20)">20 Q</button>
+      </div>
+      <p class="muted" style="font-size:11px;margin-top:10px">Uses your imported MCQ bank (${qBank.length} available).</p>
+    </div>
+  `:''}
+
+  ${practiceTab==='quiz'||(practiceTab==='skipdrill'&&activeQuiz&&skipDrill)?`
     <div class="two-col">
       <div class="card">
         <div class="section-head" style="margin-top:0">
-          <h3>${activeQuiz && quizIdx < activeQuiz.length ? `Active Quiz (${quizIdx+1}/${activeQuiz.length}) • Score: ${quizScore}` : activeQuiz && quizIdx >= activeQuiz.length ? 'Quiz Completed & Saved!' : selectedQuizSubject ? `${selectedQuizSubject} — Select Chapter` : 'MCQ Quiz Runner'}</h3>
+          <h3>${activeQuiz && quizIdx < activeQuiz.length ? (skipDrill?`Skip Drill (${quizIdx+1}/${activeQuiz.length}) • Net ${drillNet}`:`Active Quiz (${quizIdx+1}/${activeQuiz.length}) • Score: ${quizScore}`) : activeQuiz && quizIdx >= activeQuiz.length ? (skipDrill?`Drill done • Net ${drillNet} (R${drillRight}/W${drillWrong}/S${drillSkip})`:'Quiz Completed & Saved!') : selectedQuizSubject ? `${selectedQuizSubject} — Select Chapter` : 'MCQ Quiz Runner'}</h3>
           <div class="actions" style="align-items:center">
             ${activeQuiz && quizIdx < activeQuiz.length ? `<span class="tag gold" style="font-size:11px">⏱ <b id="quizLiveClock">${fmtMMSS(quizElapsedSec)}</b> • ${Math.max(1,Math.round(quizElapsedSec/Math.max(quizIdx+(quizAnswered?1:0),1)))}s/Q</span>` : ''}
             ${activeQuiz && quizIdx<activeQuiz.length && activeQuizKey ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="restartActiveQuiz()">↺ Restart</button>` : ''}
@@ -1395,7 +1498,8 @@ function practiceView(){
               }
               return `<button type="button" class="${cls}" style="${extraStyle}" ${quizAnswered?'disabled':''} onclick="answerQuizOpt(${i})"><b>${String.fromCharCode(65+i)}.</b> <span>${esc(opt)}</span>${quizAnswered && i===q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#86efac">✓ TRUE ANSWER</span>' : quizAnswered && i===quizPickedIdx && i!==q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#fca5a5">✕ WRONG</span>' : ''}</button>`;
             }).join('')}
-            ${quizAnswered?`<div class="ai-reply-box" style="${quizPickedIdx!==q.ans?'border-color:#ef4444':''}"><b>True Answer: ${String.fromCharCode(65+q.ans)}. ${esc(q.opts[q.ans])}</b> • Tag: <b>${esc(curMark)}</b>\n${esc(q.exp||'Review this concept before moving on.')}</div>
+            ${!quizAnswered&&skipDrill?`<div class="actions" style="margin-top:10px"><button type="button" class="btn secondary" onclick="skipQuizQuestion()">⏭ Skip (0 marks)</button><span class="muted" style="font-size:11px">Net ${drillNet} • R${drillRight} W${drillWrong} S${drillSkip}</span></div>`:''}
+            ${quizAnswered?`<div class="ai-reply-box" style="${quizPickedIdx!==q.ans&&quizPickedIdx!==-1?'border-color:#ef4444':''}"><b>${quizPickedIdx===-1?'Skipped. ':''}True Answer: ${String.fromCharCode(65+q.ans)}. ${esc(q.opts[q.ans])}</b> • Tag: <b>${esc(curMark)}</b>\n${esc(q.exp||'Review this concept before moving on.')}</div>
             <div class="actions" style="margin-top:12px"><button type="button" class="btn" onclick="nextQuizQuestion()">${quizIdx+1<activeQuiz.length?'Next Question →':'Finish & Save Attempt'}</button></div>`:''}
           </div>`;
         })() : activeQuiz && quizIdx >= activeQuiz.length ? (()=>{
@@ -1403,8 +1507,9 @@ function practiceView(){
           const avgS=lastAtt&&lastAtt.avgSec?lastAtt.avgSec:Math.max(1,Math.round(quizElapsedSec/Math.max(activeQuiz.length,1)));
           return `<div class="card" style="background:#0c0c12;text-align:center;padding:24px">
             <div class="eyebrow">SAVED UNDER • ${esc(activeQuizMeta.chapter)}</div>
-            <div style="font-size:36px;font-weight:800;margin:8px 0">${quizScore} / ${activeQuiz.length}</div>
-            <div class="muted" style="font-size:12px">Accuracy: ${Math.round(quizScore/activeQuiz.length*100)}% • Time: ${fmtMMSS(quizElapsedSec)} (${avgS}s/Q)</div>
+            <div style="font-size:36px;font-weight:800;margin:8px 0">${skipDrill?`${drillNet} net`:`${quizScore} / ${activeQuiz.length}`}</div>
+            <div class="muted" style="font-size:12px">${skipDrill?`Right ${drillRight} • Wrong ${drillWrong} • Skip ${drillSkip} • Forced-guess baseline ~${drillForced} (assumes skips would be wrong)`:`Accuracy: ${Math.round(quizScore/activeQuiz.length*100)}%`} • Time: ${fmtMMSS(quizElapsedSec)} (${avgS}s/Q)</div>
+            ${skipDrill&&drillNet>drillForced?`<p style="color:#86efac;font-size:12px;margin-top:8px">Skipping saved ~${drillNet-drillForced} marks vs guessing every doubtful Q wrong.</p>`:''}
             <div class="actions" style="justify-content:center;margin-top:16px">
               ${quizWrongList.length && lastAtt ? `<button type="button" class="btn" style="background:#8f1e2b" onclick="retryAttemptWrongQuestions('${lastAtt.id}')">↺ Retry ${quizWrongList.length} Wrong Qs</button>` : ''}
               <button type="button" class="btn secondary" onclick="exitActiveQuiz()">← Back to Quiz Runner</button>
@@ -1525,15 +1630,16 @@ function practiceView(){
           <div style="margin-top:10px;font-size:12px;color:#777682">ERROR LOGGED:</div>
           <p style="font-size:13px;font-weight:700;line-height:1.6;margin:4px 0 12px">${esc(curRetest.error)}</p>
           ${curRetest.fix?`<div class="ai-reply-box"><b>True Answer & Fix:</b>\n${esc(curRetest.fix)}</div>`:''}
+          <p class="muted" style="font-size:11px;margin-top:8px">Fix loop: 2× “Solved” in a row closes it (streak now ${curRetest.fixStreak||0}/2). Still Tricky resets the streak.</p>
           <div class="actions" style="margin-top:14px">
-            <button type="button" class="btn" style="background:#1b6e4d" onclick="retestResult('${curRetest.id}',true)">✓ Solved — Mark Fixed</button>
+            <button type="button" class="btn" style="background:#1b6e4d" onclick="retestResult('${curRetest.id}',true)">✓ Solved (${(curRetest.fixStreak||0)+1}/2)</button>
             <button type="button" class="btn secondary" onclick="retestResult('${curRetest.id}',false)">↺ Still Tricky — Next</button>
           </div>
         ` : '<div class="empty">No open mistakes in Re-Test queue. Great job!</div>'}
       </div>
       <div class="card">
         <h3>Open Mistakes List</h3>
-        ${openMistakes.length?openMistakes.slice().reverse().map(m=>`<div class="list-item"><div><b>${esc(m.chapter)}</b><div class="muted">${esc(m.subject)} • ${esc(m.error.slice(0,75))}</div></div><span class="tag">${esc(m.type)}</span></div>`).join(''):'<div class="empty">All logged mistakes are fixed.</div>'}
+        ${openMistakes.length?openMistakes.slice().reverse().map(m=>`<div class="list-item"><div><b>${esc(m.chapter)}</b><div class="muted">${esc(m.subject)} • ${esc(m.error.slice(0,75))}</div></div><div class="actions"><span class="tag">${esc(m.type)}</span><button type="button" class="btn secondary" style="padding:4px 8px;font-size:10px" onclick="focusMistakeRetest('${m.id}')">Fix</button></div></div>`).join(''):'<div class="empty">All logged mistakes are fixed.</div>'}
       </div>
     </div>
   `}
@@ -1661,6 +1767,7 @@ function mistakeItemHTML(m){
             <div style="${isWrongMcq?'color:#fecaca;font-weight:600':''}">${esc(m.error)}</div>
             ${m.fix?`<div style="color:#86efac;margin-top:5px"><b>True Answer / Fix:</b> ${esc(m.fix)}</div>`:''}
             <div class="actions" style="margin-top:8px">
+              ${!m.closed?`<button type="button" class="btn" style="padding:6px 10px" onclick="focusMistakeRetest('${m.id}')">↺ Fix loop</button>`:''}
               <button type="button" class="btn ${m.closed?'ghost':'secondary'}" style="padding:6px 10px" onclick="toggleMistake('${m.id}')">${m.closed?'↺ Reopen':'✓ Mark fixed'}</button>
               ${m.fileId?`<button type="button" class="btn ghost" style="padding:6px 10px" onclick="previewFile('${m.fileId}')">📎 View ${m.fileType==='application/pdf'?'PDF':'Screenshot'}</button>`:''}
             </div>
@@ -1821,22 +1928,43 @@ function dueRevisionsList(){
   return db.revisions
     .map(r=>{
       const {d3,d7,d21}=revisionScheduleDates(r);
-      const dueDates=[d3,d7,d21].filter(d=>d<=t);
+      const ms=r.milestones||{};
+      const dueDates=[];
+      if(d3<=t&&!ms.r3)dueDates.push({key:'r3',date:d3,label:'+3d'});
+      if(d7<=t&&!ms.r7)dueDates.push({key:'r7',date:d7,label:'+7d'});
+      if(d21<=t&&!ms.r21)dueDates.push({key:'r21',date:d21,label:'+21d'});
       return {...r,d3,d7,d21,dueDates};
     })
     .filter(r=>r.dueDates.length>0)
-    .sort((a,b)=>a.dueDates[0].localeCompare(b.dueDates[0]));
+    .sort((a,b)=>a.dueDates[0].date.localeCompare(b.dueDates[0].date));
 }
+
+window.markRevisionDone=id=>{
+  const r=db.revisions.find(x=>x.id===id);
+  if(!r)return;
+  const t=today();
+  const {d3,d7,d21}=revisionScheduleDates(r);
+  r.milestones=r.milestones||{};
+  if(d3<=t&&!r.milestones.r3)r.milestones.r3=t;
+  else if(d7<=t&&!r.milestones.r7)r.milestones.r7=t;
+  else if(d21<=t&&!r.milestones.r21)r.milestones.r21=t;
+  else{toast('No pending milestone for this entry.');return}
+  r.lastRevised=t;
+  save();
+  render();
+  toast('Revision milestone marked. Next spaced due will show when ready.');
+};
 
 function revision(){
   title('Revision Log');
   const dueList=dueRevisionsList();
   return `<div class="section-head"><h2>Revision Tracker</h2><small>SPACED REVISION RECORD (+3 / +7 / +21 DAYS)</small></div>
   ${dueList.length?`<div class="card" style="margin-bottom:14px;border-color:#a36d10">
-    <div class="section-head" style="margin-top:0"><h3>Due for Revision Today (${dueList.length})</h3><span class="tag gold">SPACED DUE</span></div>
-    ${dueList.map(r=>`<div class="list-item"><div><b>${esc(r.chapter)}</b> <span class="tag blue">${esc(r.subject)}</span><div class="muted" style="margin-top:3px">Logged ${shortDate(r.date)} • Due milestones: ${r.dueDates.map(shortDate).join(', ')}</div></div><span class="tag gold">DUE ${shortDate(r.dueDates[r.dueDates.length-1])}</span></div>`).join('')}
+    <div class="section-head" style="margin-top:0"><h3>Due for Revision (${dueList.length})</h3><span class="tag gold">SPACED DUE</span></div>
+    <p class="muted" style="font-size:11px;margin-bottom:8px">Daily alert bhi aayega jab spaced revision due ho. Tap “Mark revised” after you finish that slot.</p>
+    ${dueList.map(r=>`<div class="list-item" style="align-items:flex-start"><div><b>${esc(r.chapter)}</b> <span class="tag blue">${esc(r.subject)}</span><div class="muted" style="margin-top:3px">Logged ${shortDate(r.date)} • Pending: ${r.dueDates.map(d=>d.label+' ('+shortDate(d.date)+')').join(', ')}</div></div><button type="button" class="btn" style="padding:6px 10px" onclick="markRevisionDone('${r.id}')">✓ Mark revised</button></div>`).join('')}
   </div>`:''}
-  <div class="two-col"><div class="card"><h3>Log a revision session</h3><form id="revisionForm"><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="e.g. Human Reproduction"></div><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div><div class="field"><label>REVISION TYPE</label><select name="kind"><option>Short notes</option><option>NCERT</option><option>Active recall</option><option>Questions / PYQs</option><option>Full chapter</option></select></div></div><button class="btn">Save revision</button></form></div><div class="card"><h3>Revision history</h3>${allRevs().length?allRevs().slice(0,60).map(r=>{const {d3,d7,d21}=revisionScheduleDates(r);const isDue=(d3<=today()||d7<=today()||d21<=today());return `<div class="list-item"><div><b>${esc(r.chapter)}</b> ${isDue?'<span class="tag gold">DUE</span>':''}<div class="muted">${esc(r.subject)} • ${esc(r.kind)} • Next: +3d (${shortDate(d3)}), +7d (${shortDate(d7)}), +21d (${shortDate(d21)})</div></div><span>${shortDate(r.date)}</span></div>`}).join(''):'<div class="empty">Your revision history will appear here.</div>'}</div></div></div>`;
+  <div class="two-col"><div class="card"><h3>Log a revision session</h3><form id="revisionForm"><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="e.g. Human Reproduction"></div><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div><div class="field"><label>REVISION TYPE</label><select name="kind"><option>Short notes</option><option>NCERT</option><option>Active recall</option><option>Questions / PYQs</option><option>Full chapter</option></select></div></div><button class="btn">Save revision</button></form></div><div class="card"><h3>Revision history</h3>${allRevs().length?allRevs().slice(0,60).map(r=>{const {d3,d7,d21}=revisionScheduleDates(r);const ms=(db.revisions.find(x=>x.chapter===r.chapter&&x.date===r.date)||{}).milestones||{};const isDue=((d3<=today()&&!ms.r3)||(d7<=today()&&!ms.r7)||(d21<=today()&&!ms.r21));return `<div class="list-item"><div><b>${esc(r.chapter)}</b> ${isDue?'<span class="tag gold">DUE</span>':''}<div class="muted">${esc(r.subject)} • ${esc(r.kind)} • Next: +3d (${shortDate(d3)}${ms.r3?' ✓':''}), +7d (${shortDate(d7)}${ms.r7?' ✓':''}), +21d (${shortDate(d21)}${ms.r21?' ✓':''})</div></div><span>${shortDate(r.date)}</span></div>`}).join(''):'<div class="empty">Your revision history will appear here.</div>'}</div></div></div>`;
 }
 
 window.autoCalcMockScore=()=>{
@@ -2016,6 +2144,18 @@ function labBand(score){
   if(score>=500)return ['Foundation','The paper is readable. Selection still needs a subject jump.'];
   return ['Early','Accuracy before volume. Negatives are eating the paper.'];
 }
+function labGapPlan(lt,weak,target){
+  if(!lt)return 'Log a paper to unlock a week plan.';
+  const gap=Math.max(0,target-lt.score);
+  if(gap===0)return `Target ${target} already cleared on the latest paper. Hold accuracy; protect ${weak?weak[1]:'Biology'} from silly wrongs.`;
+  const lines=[`Gap ${gap} marks to ${target}.`];
+  if(weak)lines.push(`Priority subject: ${weak[1]} — raise % before adding new chapters.`);
+  if(lt.burned>5)lines.push(`Cut about ${Math.min(lt.burned,Math.ceil(gap/5))} avoidable wrongs first (+5 each if they flip).`);
+  if(lt.accuracy<0.75)lines.push(`Accuracy ${Math.round(lt.accuracy*100)}% — skip 50/50 guesses this week; use Skip drill in Practice.`);
+  else if(lt.skipped>8)lines.push(`Accuracy is usable — selectively attempt ${Math.min(lt.skipped,Math.ceil(gap/4))} high-confidence blanks only.`);
+  lines.push('This week: auto weak-chapter missions + one full mock analysis in Mock Lab.');
+  return lines.join(' ');
+}
 function labWeak(m){
   return LAB_KEYS.slice().sort((a,b)=>labPart(m[a[0]])/a[3]-labPart(m[b[0]])/b[3])[0];
 }
@@ -2065,6 +2205,10 @@ function mockLabView(){
       <div class="list-item"><span>Left blank</span><b>${lt.skipped} Q · up to ${lt.left}</b></div>
       <div class="list-item"><span>Softest subject</span><b>${weak[1]}</b></div>
     </div>
+  </div>
+  <div class="card" style="margin-top:14px;border-color:#51212b">
+    <h3>Rank gap plan (this week)</h3>
+    <p style="font-size:13px;line-height:1.7;margin:8px 0 0">${esc(labGapPlan(lt,weak,target))}</p>
   </div>
   <div class="grid2" style="margin-top:14px">
     <div class="card">
