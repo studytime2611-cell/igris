@@ -111,7 +111,13 @@ textarea{min-height:75px;resize:vertical}
 .timer-state{font:10px 'DM Mono';letter-spacing:2px;color:#d77a85}
 .custom-time-row{display:flex;gap:8px;justify-content:center;max-width:240px;margin:14px auto 0}
 
-#timerFullscreen,.fs-overlay{display:none !important}
+.timer-full{position:fixed;inset:0;z-index:100;background:#06060a;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center}
+.timer-full[hidden]{display:none}
+.tf-close{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));right:16px;font-size:20px}
+.tf-time{font:700 clamp(54px,17vw,200px) 'DM Mono',monospace;color:#fff;font-variant-numeric:tabular-nums;line-height:1;letter-spacing:2px;text-shadow:0 0 40px #e33b4b55}
+.tf-state{font:11px 'DM Mono';letter-spacing:3px;color:#d77a85;margin-top:22px}
+.tf-label{font:11px 'DM Mono';letter-spacing:2px;color:var(--gold);margin-bottom:18px;max-width:90%}
+body.timer-full-open{overflow:hidden}
 .modal-overlay{position:fixed;inset:0;background:rgba(6,6,10,.96);z-index:50;display:none;align-items:center;justify-content:center;padding:20px}
 .modal-overlay.open{display:flex}
 .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;max-width:860px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden}

@@ -17,6 +17,7 @@ const seed=()=>({
   vault:[],
   quizzes:[],
   quizAttempts:[],
+  upcomingTests:[],
   settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true}
 });
 
@@ -24,6 +25,7 @@ let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practi
 let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null, quizClockInterval=null, reminderInterval=null;
 let activeQuiz=null, activeQuizMeta={subject:'All',chapter:'All'}, quizIdx=0, quizScore=0, quizAnswered=false, quizPickedIdx=null, quizWrongList=[], quizElapsedSec=0, retestIdx=0, aiOutput='';
 let topBannerHidden=false, activeReminderTaskId=null;
+let timerEndAt=0, timerLabel='', wakeLock=null, ongoingNotifLast=0;
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -78,13 +80,25 @@ async function requestBrowserNotifyPermission(showToast=true){
 }
 window.requestBrowserNotifyPermission=()=>requestBrowserNotifyPermission(true);
 
-function sendTopNotification(titleText,bodyText,tag='igris-top'){
+async function sendTopNotification(titleText,bodyText,tag='igris-top',opts={}){
   if(!('Notification' in window))return;
-  if(Notification.permission==='granted' && db.settings.notifyEnabled!==false){
-    try{
-      new Notification(titleText,{body:bodyText,tag});
-    }catch(_){}
-  }
+  if(Notification.permission!=='granted' || db.settings.notifyEnabled===false)return;
+  const o={body:bodyText,tag,icon:'./icon-192.png',badge:'./icon-192.png',vibrate:[200,100,200],...opts};
+  try{
+    if('serviceWorker' in navigator){
+      const reg=await navigator.serviceWorker.getRegistration();
+      if(reg){await reg.showNotification(titleText,o);return}
+    }
+  }catch(_){}
+  try{new Notification(titleText,o)}catch(_){}
+}
+async function closeOngoingNotif(){
+  try{
+    if('serviceWorker' in navigator){
+      const reg=await navigator.serviceWorker.getRegistration();
+      if(reg){(await reg.getNotifications({tag:'igris-focus-timer'})).forEach(n=>n.close())}
+    }
+  }catch(_){}
 }
 
 function updateTopFocusUI(){
@@ -132,7 +146,7 @@ function showReminderAlert(task){
     };
   }
   toast(`Reminder: ${task.text}`);
-  sendTopNotification(`IGRIS Mission Reminder (${task.subject||'General'})`,task.text,'igris-mission-reminder');
+  sendTopNotification(`IGRIS Mission Reminder (${task.subject||'General'})`,task.text,'igris-mission-reminder',{requireInteraction:true,renotify:true});
 }
 
 window.dismissReminderAlert=()=>{
@@ -188,11 +202,51 @@ window.toggleZenMode=force=>{
 const zenBtn=document.getElementById('zenBtn');
 if(zenBtn)zenBtn.onclick=()=>toggleZenMode();
 
-window.toggleTimerFullscreen=()=>toast('Full-display timer overlay is disabled.');
+function ensureTimerFullEl(){
+  let el=document.getElementById('timerFull');
+  if(el)return el;
+  el=document.createElement('div');
+  el.id='timerFull';
+  el.className='timer-full';
+  el.hidden=true;
+  el.innerHTML=`<button type="button" class="icon-btn tf-close" aria-label="Close" onclick="toggleTimerFullscreen(false)">×</button>
+  <div class="tf-label" id="tfLabel"></div>
+  <div class="tf-time" id="tfTime">00:00:00</div>
+  <div class="tf-state" id="tfState"></div>
+  <div class="actions" style="justify-content:center;margin-top:30px"><button type="button" class="btn" id="tfToggle">Start focus</button><button type="button" class="btn secondary" id="tfReset">Reset</button></div>`;
+  document.body.appendChild(el);
+  el.querySelector('#tfToggle').onclick=()=>startTimer();
+  el.querySelector('#tfReset').onclick=()=>resetCurrentTimer();
+  return el;
+}
+function updateTimerFullDOM(){
+  const el=document.getElementById('timerFull');
+  if(!el||el.hidden)return;
+  const {h,m,s}=timerParts(timerSeconds);
+  document.getElementById('tfTime').textContent=`${h}:${m}:${s}`;
+  document.getElementById('tfToggle').textContent=timerRunning?'Pause':'Start focus';
+  document.getElementById('tfState').textContent=timerRunning?'FOCUS SESSION ACTIVE':(timerSeconds<=0?'SESSION COMPLETE':(timerSeconds!==timerInitial?'PAUSED':'READY WHEN YOU ARE'));
+  document.getElementById('tfLabel').textContent=timerLabel?('MISSION • '+timerLabel):'';
+}
+window.toggleTimerFullscreen=async force=>{
+  const el=ensureTimerFullEl();
+  const next=typeof force==='boolean'?force:el.hidden;
+  el.hidden=!next;
+  document.body.classList.toggle('timer-full-open',next);
+  if(next){
+    updateTimerFullDOM();
+    try{if(!document.fullscreenElement&&document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen()}catch(_){}
+    try{if('wakeLock' in navigator)wakeLock=await navigator.wakeLock.request('screen')}catch(_){}
+  }else{
+    try{if(document.fullscreenElement)await document.exitFullscreen()}catch(_){}
+    try{if(wakeLock){await wakeLock.release();wakeLock=null}}catch(_){}
+  }
+};
 window.resetCurrentTimer=()=>setTimer(Math.round(timerInitial/60)||25);
 
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape' && document.body.classList.contains('zen-mode'))toggleZenMode(false);
+  if(e.key==='Escape' && document.body.classList.contains('timer-full-open'))toggleTimerFullscreen(false);
 });
 
 const IDB_NAME='igris-files-db', STORE_NAME='files';
@@ -441,6 +495,9 @@ window.startMissionFocus=(id)=>{
   if(!t||!mins||mins<1){toast('Is mission ki focus duration set nahi hai.');return}
   clearInterval(timerInterval);
   timerRunning=false;
+  timerEndAt=0;
+  timerLabel=t.text;
+  closeOngoingNotif();
   topBannerHidden=false;
   timerInitial=mins*60;
   timerSeconds=mins*60;
@@ -656,7 +713,7 @@ function focus(){
     <div class="card timer-wrap">
       <div class="timer-top-bar">
         <div class="timer-state" id="timerState">${timerRunning?'FOCUS SESSION ACTIVE':'READY WHEN YOU ARE'}</div>
-        <button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="requestBrowserNotifyPermission()">🔔 Alert: ${esc(notifyStatus)}</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="toggleTimerFullscreen(true)">⛶ Full screen</button><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="requestBrowserNotifyPermission()">🔔 Alert: ${esc(notifyStatus)}</button></div>
       </div>
       <div class="timer-flip-wrap">
         <div class="timer-flip-unit"><div class="timer-flip-val" id="tHrs">${h}</div><div class="timer-flip-lbl">HRS</div></div>
@@ -679,7 +736,7 @@ function focus(){
         <input type="number" id="customMinInput" min="1" max="720" placeholder="Custom mins">
         <button type="button" class="btn secondary" onclick="applyCustomTimer()">Set</button>
       </div>
-      <p class="muted" style="font-size:10px;margin-top:10px">Top bar &amp; browser tab live timer update hote hain, aur session finish hone par top notification bhi aati hai.</p>
+      <p class="muted" style="font-size:10px;margin-top:10px">Timer chalte waqt notification bar me live countdown dikhega aur session finish hone par alert aayega. Pehle 🔔 button se notification Allow kar do.</p>
     </div>
     <div class="card">
       <h3>Log a completed study session</h3>
@@ -709,10 +766,14 @@ function updateTimerDOM(){
   const b1=document.getElementById('startTimer');
   if(b1)b1.textContent=timerRunning?'Pause':'Start focus';
   updateTopFocusUI();
+  updateTimerFullDOM();
 }
 window.setTimer=m=>{
   clearInterval(timerInterval);
   timerRunning=false;
+  timerEndAt=0;
+  timerLabel='';
+  closeOngoingNotif();
   topBannerHidden=false;
   timerInitial=m*60;
   timerSeconds=m*60;
@@ -725,31 +786,59 @@ window.applyCustomTimer=()=>{
   setTimer(v);
   toast(`Timer set to ${v} mins.`);
 };
+function fmtClock(sec){const {h,m,s}=timerParts(sec);return (+h>0?h+':':'')+m+':'+s}
+function updateOngoingNotif(force){
+  if(!timerRunning)return;
+  const now=Date.now();
+  if(!force && now-ongoingNotifLast<15000)return;
+  ongoingNotifLast=now;
+  const endTxt=new Date(timerEndAt).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+  sendTopNotification(`⏳ Focus • ${fmtClock(timerSeconds)} left`,`${timerLabel?timerLabel+' • ':''}Ends at ${endTxt}`,'igris-focus-timer',{silent:true,renotify:false,requireInteraction:true});
+}
+function setTimerStateText(txt){const st=document.getElementById('timerState');if(st)st.textContent=txt}
+function finishTimer(){
+  clearInterval(timerInterval);
+  timerRunning=false;
+  timerEndAt=0;
+  const completedMins=Math.max(1,Math.round(timerInitial/60));
+  db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,questions:0,topic:'Completed flip timer session'});
+  save();
+  toast(`Focus complete! ${completedMins} min session logged.`);
+  sendTopNotification('⏰ IGRIS Focus Complete!',`${completedMins} min focus session logged.`,'igris-focus-timer',{requireInteraction:true,renotify:true,silent:false,vibrate:[300,150,300,150,600]});
+  render();
+}
+function timerTick(){
+  if(!timerRunning)return;
+  timerSeconds=Math.max(0,Math.ceil((timerEndAt-Date.now())/1000));
+  updateTimerDOM();
+  if(timerSeconds<=0){finishTimer();return}
+  updateOngoingNotif(false);
+}
 function startTimer(){
-  timerRunning=!timerRunning;
-  const st=document.getElementById('timerState');
   if(timerRunning){
-    topBannerHidden=false;
-    if(st)st.textContent='FOCUS SESSION ACTIVE';
-    sendTopNotification('IGRIS Focus Timer Started',`${fmtMMSS(timerSeconds)} focus session active.`,'igris-focus-timer');
-    timerInterval=setInterval(()=>{
-      timerSeconds--;
-      updateTimerDOM();
-      if(timerSeconds<=0){
-        clearInterval(timerInterval);
-        timerRunning=false;
-        const completedMins=Math.max(1,Math.round(timerInitial/60));
-        db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,questions:0,topic:'Completed flip timer session'});
-        save();
-        toast(`Focus complete! ${completedMins} min session logged.`);
-        sendTopNotification('IGRIS Focus Complete!',`${completedMins} min focus session logged.`,'igris-focus-timer');
-        render();
-      }
-    },1000);
-  }else{
+    timerTick();
+    if(!timerRunning)return;
     clearInterval(timerInterval);
-    if(st)st.textContent='PAUSED';
+    timerRunning=false;
+    timerEndAt=0;
+    closeOngoingNotif();
+    setTimerStateText('PAUSED');
+    updateTimerDOM();
+    return;
   }
+  if(timerSeconds<=0)timerSeconds=timerInitial;
+  timerRunning=true;
+  topBannerHidden=false;
+  timerEndAt=Date.now()+timerSeconds*1000;
+  ongoingNotifLast=0;
+  setTimerStateText('FOCUS SESSION ACTIVE');
+  if('Notification' in window && Notification.permission==='default'){
+    requestBrowserNotifyPermission(false).then(ok=>{if(ok)updateOngoingNotif(true)});
+  }else{
+    updateOngoingNotif(true);
+  }
+  clearInterval(timerInterval);
+  timerInterval=setInterval(timerTick,1000);
   updateTimerDOM();
 }
 
@@ -1477,10 +1566,58 @@ window.autoCalcMockScore=()=>{
   }
 };
 
+function daysUntil(iso){
+  const [y,m,d]=String(iso).split('-').map(Number);
+  const t=new Date(y,(m||1)-1,d||1).getTime();
+  const n=new Date();
+  const t0=new Date(n.getFullYear(),n.getMonth(),n.getDate()).getTime();
+  return Math.round((t-t0)/86400000);
+}
+function upcomingTestsHTML(){
+  const list=(db.upcomingTests||[]).slice().sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')));
+  const chip=n=>n<0?`<span class="tag">Passed ${-n}d ago</span>`:n===0?'<span class="tag">TODAY</span>':n===1?'<span class="tag gold">Tomorrow</span>':`<span class="tag blue">in ${n} days</span>`;
+  return `<div class="section-head" style="margin-top:6px"><h2>Upcoming tests</h2><small>DATE • SYLLABUS</small></div>
+  <div class="two-col" style="margin-bottom:22px">
+    <div class="card">
+      <h3>Add upcoming test</h3>
+      <form id="upcomingForm">
+        <div class="field"><label>TEST NAME</label><input name="name" required placeholder="e.g. Allen Part Test 03"></div>
+        <div class="form-grid">
+          <div class="field"><label>TEST DATE</label><input name="date" type="date" required></div>
+          <div class="field"><label>TIME (OPTIONAL)</label><input name="time" type="time"></div>
+        </div>
+        <div class="field"><label>SYLLABUS / TOPICS (TEXT)</label><textarea name="syllabus" placeholder="e.g. Physics: Kinematics, Laws of Motion | Chem: Mole concept | Bio: Cell cycle"></textarea></div>
+        <div class="field"><label>SYLLABUS FILE (IMAGE OR PDF, OPTIONAL)</label><input type="file" name="file" accept="image/*,application/pdf"></div>
+        <button type="submit" class="btn">＋ Add upcoming test</button>
+      </form>
+    </div>
+    <div class="card">
+      <h3>Scheduled (${list.length})</h3>
+      ${list.length?list.map(t=>`<div class="list-item" style="flex-direction:column;align-items:stretch;gap:8px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          <div><b style="font-size:12px">${esc(t.name)}</b><div class="muted" style="font-size:10px;margin-top:3px">${dateText(t.date)}${t.time?' • '+esc(t.time):''}</div></div>
+          ${chip(daysUntil(t.date))}
+        </div>
+        ${t.syllabus?`<div class="muted" style="font-size:11px;line-height:1.6;white-space:pre-wrap">${esc(t.syllabus)}</div>`:''}
+        <div class="actions">
+          ${t.fileId?`<button type="button" class="btn secondary" style="padding:6px 10px" onclick="previewFile('${t.fileId}')">📎 Open syllabus file</button>`:''}
+          <button type="button" class="icon-btn" style="padding:5px 9px" onclick="deleteUpcomingTest('${t.id}')">×</button>
+        </div>
+      </div>`).join(''):'<div class="empty">No upcoming test added yet. Date aur syllabus daal do.</div>'}
+    </div>
+  </div>`;
+}
+window.deleteUpcomingTest=async id=>{
+  const t=(db.upcomingTests||[]).find(x=>x.id===id);
+  if(t&&t.fileId)await deleteStoredFile(t.fileId);
+  db.upcomingTests=(db.upcomingTests||[]).filter(x=>x.id!==id);
+  save();render();toast('Upcoming test removed.');
+};
+
 function tests(){
   title('Mock Tests');
   let avg=db.tests.length?Math.round(db.tests.reduce((a,t)=>a+t.score,0)/db.tests.length):0;
-  return `<div class="stats">${stat('TESTS TAKEN',db.tests.length,'Total recorded')}${stat('AVERAGE SCORE',avg,'Out of 720')}${stat('BEST SCORE',db.tests.length?Math.max(...db.tests.map(t=>t.score)):0,'Out of 720')}${stat('LATEST ACCURACY',db.tests.length?db.tests[db.tests.length-1].accuracy+'%':'—','As entered')}</div><div class="two-col"><div class="card"><h3>Record mock test</h3><form id="testForm" oninput="autoCalcMockScore()"><div class="field"><label>TEST NAME</label><input name="name" placeholder="e.g. Full syllabus test 04" required></div><div class="form-grid"><div class="field"><label>SCORE ( / 720 )</label><input name="score" type="number" min="0" max="720" required></div><div class="field"><label>ACCURACY (%)</label><input name="accuracy" type="number" min="0" max="100" placeholder="e.g. 72"></div></div><div class="form-grid"><div class="field"><label>PHYSICS</label><input name="physics" type="number" min="0" max="180" placeholder="Score"></div><div class="field"><label>CHEMISTRY</label><input name="chemistry" type="number" min="0" max="180" placeholder="Score"></div></div><div class="field"><label>BIOLOGY</label><input name="biology" type="number" min="0" max="360" placeholder="Score"></div><div class="field"><label>ANALYSIS / NEXT ACTION</label><textarea name="analysis" placeholder="What needs attention before the next test?"></textarea></div><button class="btn">Save test</button></form></div><div class="card"><h3>Test history</h3>${db.tests.length?`<div class="table-wrap"><table><thead><tr><th>TEST</th><th>SCORE</th><th>P / C / B</th><th>ACCURACY</th><th>DATE</th><th></th></tr></thead><tbody>${db.tests.slice().reverse().map(t=>{const pcb=(t.physics||t.chemistry||t.biology)?`${t.physics||0} / ${t.chemistry||0} / ${t.biology||0}`:'—';return `<tr><td>${esc(t.name)}</td><td><b>${t.score}</b></td><td><span class="muted">${pcb}</span></td><td>${t.accuracy||'—'}%</td><td>${t.date}</td><td><button class="icon-btn" onclick="removeItem('tests','${t.id}')">×</button></td></tr>`}).join('')}</tbody></table></div>${db.tests.slice().reverse().slice(0,3).map(t=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><b style="font-size:11px">${esc(t.name)}</b><p class="muted" style="font-size:10px">${esc(t.analysis||'No analysis added.')}</p></div>`).join('')}`:'<div class="empty">No mock tests recorded yet.</div>'}</div></div>`;
+  return `<div class="stats">${stat('TESTS TAKEN',db.tests.length,'Total recorded')}${stat('AVERAGE SCORE',avg,'Out of 720')}${stat('BEST SCORE',db.tests.length?Math.max(...db.tests.map(t=>t.score)):0,'Out of 720')}${stat('LATEST ACCURACY',db.tests.length?db.tests[db.tests.length-1].accuracy+'%':'—','As entered')}</div>${upcomingTestsHTML()}<div class="two-col"><div class="card"><h3>Record mock test</h3><form id="testForm" oninput="autoCalcMockScore()"><div class="field"><label>TEST NAME</label><input name="name" placeholder="e.g. Full syllabus test 04" required></div><div class="form-grid"><div class="field"><label>SCORE ( / 720 )</label><input name="score" type="number" min="0" max="720" required></div><div class="field"><label>ACCURACY (%)</label><input name="accuracy" type="number" min="0" max="100" placeholder="e.g. 72"></div></div><div class="form-grid"><div class="field"><label>PHYSICS</label><input name="physics" type="number" min="0" max="180" placeholder="Score"></div><div class="field"><label>CHEMISTRY</label><input name="chemistry" type="number" min="0" max="180" placeholder="Score"></div></div><div class="field"><label>BIOLOGY</label><input name="biology" type="number" min="0" max="360" placeholder="Score"></div><div class="field"><label>ANALYSIS / NEXT ACTION</label><textarea name="analysis" placeholder="What needs attention before the next test?"></textarea></div><button class="btn">Save test</button></form></div><div class="card"><h3>Test history</h3>${db.tests.length?`<div class="table-wrap"><table><thead><tr><th>TEST</th><th>SCORE</th><th>P / C / B</th><th>ACCURACY</th><th>DATE</th><th></th></tr></thead><tbody>${db.tests.slice().reverse().map(t=>{const pcb=(t.physics||t.chemistry||t.biology)?`${t.physics||0} / ${t.chemistry||0} / ${t.biology||0}`:'—';return `<tr><td>${esc(t.name)}</td><td><b>${t.score}</b></td><td><span class="muted">${pcb}</span></td><td>${t.accuracy||'—'}%</td><td>${t.date}</td><td><button class="icon-btn" onclick="removeItem('tests','${t.id}')">×</button></td></tr>`}).join('')}</tbody></table></div>${db.tests.slice().reverse().slice(0,3).map(t=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><b style="font-size:11px">${esc(t.name)}</b><p class="muted" style="font-size:10px">${esc(t.analysis||'No analysis added.')}</p></div>`).join('')}`:'<div class="empty">No mock tests recorded yet.</div>'}</div></div>`;
 }
 function dayKeys(n){return Array.from({length:n},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(n-1-i));return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')})}
 function dayLabel(k){return new Date(k+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short'})}
@@ -1550,6 +1687,7 @@ function bindForms(){
   const bind=(id,fn)=>{const el=document.getElementById(id);if(el)el.onsubmit=async e=>{e.preventDefault();await fn(el)}};
   bind('taskForm',f=>{
     const remVal=(f.reminderAt?.value||'').trim();
+    if(remVal&&('Notification' in window)&&Notification.permission==='default')requestBrowserNotifyPermission(false);
     const fMins=parseInt(f.focusMins?.value,10);
     const mType=f.missionType?.value||suggestMissionType(f.text.value)||'Practice';
     const taskDate=remVal&&/^\d{4}-\d{2}-\d{2}/.test(remVal)?remVal.slice(0,10):today();
@@ -1603,6 +1741,16 @@ function bindForms(){
     db.revisions.push({id:crypto.randomUUID(),date:d,r3:addDays(d,3),r7:addDays(d,7),r21:addDays(d,21),chapter:f.chapter.value.trim(),subject:f.subject.value,kind:f.kind.value});
     save();render();toast('Revision logged (+3d / +7d / +21d scheduled).');
   });
+  bind('upcomingForm',async f=>{
+    let meta=null;
+    const file=f.file.files[0];
+    if(file){
+      try{meta=await storeFile(file)}catch(_){toast('File save nahi hui, bina file ke save kar raha hoon.')}
+    }
+    db.upcomingTests=db.upcomingTests||[];
+    db.upcomingTests.push({id:crypto.randomUUID(),name:f.elements.name.value.trim(),date:f.date.value,time:f.time.value||'',syllabus:f.syllabus.value.trim(),...(meta?{fileId:meta.id,fileName:meta.name,fileType:meta.type}:{})});
+    save();render();toast('Upcoming test added.');
+  });
   bind('testForm',f=>{
     const p=+f.physics.value||0,c=+f.chemistry.value||0,b=+f.biology.value||0;
     const manualScore=+f.score.value;
@@ -1631,3 +1779,11 @@ const importBtnEl=document.getElementById('importBtn');
 const importFileEl=document.getElementById('importFile');
 if(importBtnEl&&importFileEl)importBtnEl.onclick=()=>importFileEl.click();
 if(importFileEl)importFileEl.onchange=e=>{const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d||!Array.isArray(d.tasks))throw new Error('bad');if(!confirm('Replace current data with this backup?')){e.target.value='';return}db={...seed(),...d};save();render();toast('Backup imported.')}catch(_){toast('Invalid backup file.')}e.target.value=''};r.readAsText(file)};
+
+document.addEventListener('visibilitychange',async()=>{
+  if(document.hidden)return;
+  timerTick();
+  checkDueReminders();
+  const el=document.getElementById('timerFull');
+  if(el&&!el.hidden&&'wakeLock' in navigator){try{wakeLock=await navigator.wakeLock.request('screen')}catch(_){}}
+});
