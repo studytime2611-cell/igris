@@ -65,32 +65,39 @@ async function requestBrowserNotifyPermission(showToast=true){
     if(showToast)toast('Browser notifications are not supported here.');
     return false;
   }
-  if(Notification.permission==='granted'){
-    db.settings.notifyEnabled=true;
-    save();
-    if(showToast)toast('Top notifications enabled.');
-    return true;
+  let perm=Notification.permission;
+  if(perm==='default'){
+    try{perm=await Notification.requestPermission()}catch(_){perm=Notification.permission}
   }
-  const perm=await Notification.requestPermission();
   const ok=perm==='granted';
   db.settings.notifyEnabled=ok;
   save();
-  if(showToast)toast(ok?'Top notifications enabled!':'Notification permission blocked.');
+  if(current==='focus'||current==='missions')render();
+  if(showToast){
+    if(ok){
+      const err=await sendTopNotification('IGRIS test ✅','Notification bar working hai.','igris-test');
+      toast(err?('Notification error: '+err):'Test notification bhej di, shade check karo.');
+    }else toast('Notification permission blocked.');
+  }
   return ok;
 }
 window.requestBrowserNotifyPermission=()=>requestBrowserNotifyPermission(true);
 
 async function sendTopNotification(titleText,bodyText,tag='igris-top',opts={}){
-  if(!('Notification' in window))return;
-  if(Notification.permission!=='granted' || db.settings.notifyEnabled===false)return;
-  const o={body:bodyText,tag,icon:'./icon-192.png',badge:'./icon-192.png',vibrate:[200,100,200],...opts};
+  if(!('Notification' in window))return 'Notification not supported';
+  if(Notification.permission!=='granted')return 'Permission: '+Notification.permission;
+  if(db.settings.notifyEnabled===false)return 'Notifications disabled in settings';
+  const o={body:bodyText,tag,icon:'./icon-192.png',badge:'./icon-192.png',...opts};
+  if(o.silent)delete o.vibrate;
+  else if(!o.vibrate)o.vibrate=[200,100,200];
   try{
     if('serviceWorker' in navigator){
       const reg=await navigator.serviceWorker.getRegistration();
-      if(reg){await reg.showNotification(titleText,o);return}
+      if(reg){await reg.showNotification(titleText,o);return null}
     }
-  }catch(_){}
-  try{new Notification(titleText,o)}catch(_){}
+    new Notification(titleText,o);
+    return null;
+  }catch(e){return String(e&&e.message||e)}
 }
 async function closeOngoingNotif(){
   try{
@@ -737,6 +744,7 @@ function focus(){
         <button type="button" class="btn secondary" onclick="applyCustomTimer()">Set</button>
       </div>
       <p class="muted" style="font-size:10px;margin-top:10px">Timer chalte waqt notification bar me live countdown dikhega aur session finish hone par alert aayega. Pehle 🔔 button se notification Allow kar do.</p>
+      <p class="muted" id="tickDebug" style="font-size:9px;margin-top:6px"></p>
     </div>
     <div class="card">
       <h3>Log a completed study session</h3>
@@ -793,7 +801,7 @@ function updateOngoingNotif(force){
   if(!force && now-ongoingNotifLast<15000)return;
   ongoingNotifLast=now;
   const endTxt=new Date(timerEndAt).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
-  sendTopNotification(`⏳ Focus • ${fmtClock(timerSeconds)} left`,`${timerLabel?timerLabel+' • ':''}Ends at ${endTxt}`,'igris-focus-timer',{silent:true,renotify:false,requireInteraction:true});
+  sendTopNotification(`⏳ Focus • ${fmtClock(timerSeconds)} left`,`${timerLabel?timerLabel+' • ':''}Ends at ${endTxt}`,'igris-focus-timer',{silent:true,requireInteraction:true});
 }
 function setTimerStateText(txt){const st=document.getElementById('timerState');if(st)st.textContent=txt}
 function finishTimer(){
@@ -809,10 +817,14 @@ function finishTimer(){
 }
 function timerTick(){
   if(!timerRunning)return;
-  timerSeconds=Math.max(0,Math.ceil((timerEndAt-Date.now())/1000));
-  updateTimerDOM();
-  if(timerSeconds<=0){finishTimer();return}
-  updateOngoingNotif(false);
+  try{
+    timerSeconds=Math.max(0,Math.ceil((timerEndAt-Date.now())/1000));
+    updateTimerDOM();
+    const dbg=document.getElementById('tickDebug');
+    if(dbg)dbg.textContent='sync '+new Date().toLocaleTimeString('en-IN');
+    if(timerSeconds<=0){finishTimer();return}
+    updateOngoingNotif(false);
+  }catch(e){console.error('timerTick',e)}
 }
 function startTimer(){
   if(timerRunning){
@@ -831,15 +843,11 @@ function startTimer(){
   topBannerHidden=false;
   timerEndAt=Date.now()+timerSeconds*1000;
   ongoingNotifLast=0;
-  setTimerStateText('FOCUS SESSION ACTIVE');
-  if('Notification' in window && Notification.permission==='default'){
-    requestBrowserNotifyPermission(false).then(ok=>{if(ok)updateOngoingNotif(true)});
-  }else{
-    updateOngoingNotif(true);
-  }
   clearInterval(timerInterval);
-  timerInterval=setInterval(timerTick,1000);
+  timerInterval=setInterval(timerTick,500);
+  setTimerStateText('FOCUS SESSION ACTIVE');
   updateTimerDOM();
+  setTimeout(()=>{try{updateOngoingNotif(true)}catch(_){}},0);
 }
 
 const MARKS=['Imp','Easy','Medium','Hard'];
