@@ -28,6 +28,7 @@ let topBannerHidden=false, activeReminderTaskId=null;
 let timerEndAt=0, timerLabel='', wakeLock=null, ongoingNotifLast=0;
 let timerMissionId=null, missionRanSecs=0, runStartedAt=0, missionSessionId=null, lastMissionFlush=0;
 let vaultChapterFilter='All', mistakeOpenGroups=new Set(), activeQuizKey=null, activeQuizArgs=null;
+let mockLabFix=8, mockLabFocusId=null;
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -1915,7 +1916,35 @@ function dayLabel(k){return new Date(k+'T12:00:00').toLocaleDateString('en-IN',{
 function barChart(labels,vals,id){const W=420,H=170,pt=20,pb=26,n=vals.length,max=Math.max(...vals,1),bw=W/n;let o=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f04a5b"/><stop offset="1" stop-color="#7c1d2a"/></linearGradient></defs><line x1="0" x2="${W}" y1="${H-pb}" y2="${H-pb}" stroke="#272731"/>`;vals.forEach((v,i)=>{const h=(H-pt-pb)*v/max,x=i*bw+bw*.18,y=H-pb-h;o+=`<rect x="${x}" y="${y}" width="${bw*.64}" height="${v?Math.max(h,3):0}" rx="4" fill="url(#${id})"/>`;if(v)o+=`<text x="${x+bw*.32}" y="${y-5}" text-anchor="middle" class="cv">${v}</text>`;o+=`<text x="${x+bw*.32}" y="${H-9}" text-anchor="middle" class="cl">${esc(labels[i])}</text>`});return o+'</svg>'}
 function lineChart(labels,vals,max){const W=420,H=190,pl=30,pr=12,pt=20,pb=26,n=vals.length,step=n>1?(W-pl-pr)/(n-1):0,X=i=>n>1?pl+i*step:W/2,Y=v=>pt+(H-pt-pb)*(1-v/max);let o=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">`;[0,.25,.5,.75,1].forEach(f=>{const y=Y(max*f);o+=`<line x1="${pl}" x2="${W-pr}" y1="${y}" y2="${y}" stroke="#272731"/><text x="${pl-5}" y="${y+3}" text-anchor="end" class="cl">${Math.round(max*f)}</text>`});if(n>1)o+=`<polyline fill="none" stroke="#e33b4b" stroke-width="2.2" stroke-linejoin="round" points="${vals.map((v,i)=>X(i)+','+Y(v)).join(' ')}"/>`;vals.forEach((v,i)=>{o+=`<circle cx="${X(i)}" cy="${Y(v)}" r="4" fill="#09090d" stroke="#f04a5b" stroke-width="2"/><text x="${X(i)}" y="${Y(v)-9}" text-anchor="middle" class="cv">${v}</text><text x="${X(i)}" y="${H-9}" text-anchor="middle" class="cl">${esc(labels[i])}</text>`});return o+'</svg>'}
 function hbars(items,unit=''){const max=Math.max(...items.map(x=>x.value),1);return items.map(x=>`<div class="progress-row"><div class="progress-meta"><span>${esc(x.label)}</span><span>${x.value}${unit}</span></div><div class="bar"><span style="width:${x.value/max*100}%"></span></div></div>`).join('')}
-function streak(){const days=new Set([...db.sessions.map(x=>x.date),...db.tasks.filter(t=>t.done).map(t=>t.doneAt||t.date)]);let d=new Date(),c=0;const key=()=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');if(!days.has(key()))d.setDate(d.getDate()-1);while(days.has(key())){c++;d.setDate(d.getDate()-1)}return c}
+function dayFocusMins(dateKey){
+  return db.sessions.filter(x=>x.date===dateKey).reduce((a,x)=>a+(x.minutes||0),0);
+}
+function dayTasksProgress(dateKey){
+  const dayTasks=db.tasks.filter(t=>t.date===dateKey);
+  if(!dayTasks.length)return{total:0,done:0,pct:0};
+  const done=dayTasks.filter(t=>t.done).length;
+  return{total:dayTasks.length,done,pct:done/dayTasks.length};
+}
+/** A day counts toward streak if focus ≥ 6h (360 min) OR ≥60% of that day's missions are done. */
+function dayQualifies(dateKey){
+  if(dayFocusMins(dateKey)>=360)return true;
+  const p=dayTasksProgress(dateKey);
+  return p.total>0 && p.pct>=0.6;
+}
+function streak(){
+  let d=new Date(),c=0;
+  const key=()=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  if(!dayQualifies(key()))d.setDate(d.getDate()-1);
+  while(dayQualifies(key())){c++;d.setDate(d.getDate()-1)}
+  return c;
+}
+function streakLabel(){
+  return `D-${String(streak()).padStart(2,'0')}🔥`;
+}
+function updateStreakBadge(){
+  const el=document.getElementById('streakBadge');
+  if(el)el.textContent=streakLabel();
+}
 
 function analytics(){
   title('Analytics');
@@ -1926,7 +1955,8 @@ function analytics(){
   const mSub=subs.map(s=>({label:s,value:db.mistakes.filter(m=>m.subject===s).length}));
   const types=[...new Set(db.mistakes.map(m=>m.type))].map(t=>({label:t,value:db.mistakes.filter(m=>m.type===t).length})).sort((a,b)=>b.value-a.value);
   const fSub=['Physics','Chemistry','Biology'].map(s=>({label:s,value:db.sessions.filter(x=>x.subject===s).reduce((a,x)=>a+x.minutes,0)}));
-  return `<div class="stats">${stat('TOTAL FOCUS',`${Math.floor(totMin/60)}h ${totMin%60}m`,`${totQ} total MCQs logged`)}${stat('MISSIONS CLOSED',closedAll,'All time')}${stat('STREAK',`${streak()} day${streak()===1?'':'s'}`,'Focus or mission daily')}${stat('BEST SCORE',best,'Out of 720')}</div>
+  const sk=streak();
+  return `<div class="stats">${stat('TOTAL FOCUS',`${Math.floor(totMin/60)}h ${totMin%60}m`,`${totQ} total MCQs logged`)}${stat('MISSIONS CLOSED',closedAll,'All time')}${stat('STREAK',`${sk} day${sk===1?'':'s'} 🔥`,'6h focus or 60% missions')}${stat('BEST SCORE',best,'Out of 720')}</div>
   <div class="grid2"><div class="card"><h3>Focus minutes — last 7 days</h3>${barChart(lab,focus7,'bar-f2')}</div><div class="card"><h3>Missions closed — last 7 days</h3>${barChart(lab,closed7,'bar-m')}</div></div>
   <div class="grid2" style="margin-top:14px"><div class="card"><h3>Mock test score trend</h3>${last.length?lineChart(last.map((t,i)=>'T'+(db.tests.length-last.length+i+1)),last.map(t=>t.score),720):'<div class="empty">Record a mock test to see your trend.</div>'}</div><div class="card"><h3>Subject-wise mock average (%)</h3>${db.tests.length?hbars(subAvg,'%'):'<div class="empty">Add subject scores in a mock test to see this.</div>'}<h3 style="margin-top:22px">Focus time by subject (min)</h3>${totMin?hbars(fSub):'<div class="empty">Log focus sessions to see this.</div>'}</div></div>
   <div class="grid2" style="margin-top:14px"><div class="card"><h3>Mistakes by subject</h3>${db.mistakes.length?hbars(mSub):'<div class="empty">No mistakes recorded yet.</div>'}</div><div class="card"><h3>Mistakes by type</h3>${types.length?hbars(types):'<div class="empty">No mistakes recorded yet.</div>'}<p class="muted" style="font-size:10px;margin-top:14px">Open: ${db.mistakes.filter(m=>!m.closed).length} • Fixed: ${db.mistakes.filter(m=>m.closed).length}</p></div></div>
@@ -1958,11 +1988,124 @@ window.addTrackChapter=e=>{e.preventDefault();const cfg=TRACK[trackTab],name=e.t
 function allRevs(){const out=db.revisions.map(r=>({date:r.date,chapter:r.chapter,subject:r.subject,kind:r.kind,r3:r.r3,r7:r.r7,r21:r.r21}));for(const sub of Object.keys(db.chapters))for(const c of db.chapters[sub])for(const [k,d] of Object.entries(c.t||{}))if(/^r\d$/.test(k))out.push({date:d,chapter:c.name,subject:sub,kind:'Revision '+k.slice(1)});return out.sort((a,b)=>b.date.localeCompare(a.date))}
 function covg(k,key){const l=tabChapters(TRACK[k]);return l.length?Math.round(l.filter(c=>key==='done'?c.done:(c.t||{})[key]).length/l.length*100):0}
 
+const LAB_KEYS=[['physics','Physics',45,180],['chemistry','Chemistry',45,180],['botany','Botany',45,180],['zoology','Zoology',45,180]];
+function labList(){return (db.mockLabs||[]).slice().sort((a,b)=>a.date.localeCompare(b.date)||a.name.localeCompare(b.name))}
+function labPart(a){return (a?.c||0)*4-(a?.w||0)}
+function labTotals(m){
+  let correct=0,wrong=0,score=0;
+  for(const [k] of LAB_KEYS){correct+=m[k]?.c||0;wrong+=m[k]?.w||0;score+=labPart(m[k])}
+  const attempted=correct+wrong, skipped=180-attempted;
+  return {correct,wrong,attempted,skipped,score,accuracy:attempted?correct/attempted:0,burned:wrong,left:skipped*4};
+}
+function labMean(xs){return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0}
+function labProject(scores){
+  if(!scores.length)return 0;
+  if(scores.length===1)return scores[0];
+  const n=scores.length; let sx=0,sy=0,sxy=0,sx2=0;
+  scores.forEach((y,i)=>{sx+=i;sy+=y;sxy+=i*y;sx2+=i*i});
+  const den=n*sx2-sx*sx; if(!den)return scores[n-1];
+  const slope=(n*sxy-sx*sy)/den, intercept=(sy-slope*sx)/n;
+  return Math.round(Math.max(0,Math.min(720,intercept+slope*n)));
+}
+function labBand(score){
+  if(score>=700)return ['Top band','Historically the first few hundred to low thousands. Not an AIR.'];
+  if(score>=670)return ['High competitive','Often a serious government-seat conversation. Cutoffs move.'];
+  if(score>=640)return ['Competitive','State merit and stronger private options usually open here.'];
+  if(score>=600)return ['Mid competitive','Counselling range. Government seats get tight for general.'];
+  if(score>=550)return ['Building','A 40–70 mark jump changes the map more than another full pass.'];
+  if(score>=500)return ['Foundation','The paper is readable. Selection still needs a subject jump.'];
+  return ['Early','Accuracy before volume. Negatives are eating the paper.'];
+}
+function labWeak(m){
+  return LAB_KEYS.slice().sort((a,b)=>labPart(m[a[0]])/a[3]-labPart(m[b[0]])/b[3])[0];
+}
+window.setMockTarget=v=>{db.settings.mockTarget=Math.max(0,Math.min(720,parseInt(v,10)||0));save()};
+window.setMockLabFocus=id=>{mockLabFocusId=id;render()};
+window.setMockLabFix=v=>{mockLabFix=parseInt(v,10)||0;render()};
+window.deleteMockLab=id=>{db.mockLabs=(db.mockLabs||[]).filter(x=>x.id!==id);if(mockLabFocusId===id)mockLabFocusId=null;save();render();toast('Paper removed.')};
+
+function mockLabView(){
+  title('Mock Lab');
+  const list=labList();
+  const scores=list.map(m=>labTotals(m).score);
+  const latest=list.at(-1)||null;
+  const prev=list.at(-2)||null;
+  const lt=latest?labTotals(latest):null;
+  const delta=latest&&prev?lt.score-labTotals(prev).score:0;
+  const avg=Math.round(labMean(scores));
+  const best=scores.length?Math.max(...scores):0;
+  const projected=labProject(scores);
+  const target=db.settings.mockTarget??650;
+  const focused=list.find(m=>m.id===mockLabFocusId)||latest;
+  const ft=focused?labTotals(focused):null;
+  const weak=latest?labWeak(latest):null;
+  const band=lt?labBand(lt.score):null;
+  const flip=ft?Math.max(0,Math.min(ft.wrong,mockLabFix)):0;
+  const flipped=ft?Math.min(720,ft.score+flip*5):0;
+  const labels=list.map(m=>new Date(m.date+'T12:00:00').toLocaleDateString('en-IN',{day:'numeric',month:'short'}));
+  return `<div class="stats">
+    ${stat('LATEST',lt?lt.score:'—',latest?`${esc(latest.name)} · ${delta>=0?'+':''}${delta} vs previous`:'Log right and wrong')}
+    ${stat('BEST',best||'—',`${list.length} papers`)}
+    ${stat('MEAN',list.length?avg:'—','All Mock Lab papers')}
+    ${stat('IF SLOPE HOLDS',list.length?projected:'—',lt?`${projected-lt.score>=0?'+':''}${projected-lt.score} from latest`:'Need a paper')}
+  </div>
+  <div class="card" style="margin-bottom:14px">
+    <div class="section-head" style="margin:0 0 8px"><h2>Target</h2><small>OUT OF 720</small></div>
+    <div class="actions" style="align-items:center">
+      <input type="number" min="0" max="720" value="${target}" style="max-width:120px" onchange="setMockTarget(this.value)">
+      <span class="muted">${lt?`Gap ${Math.max(0,target-lt.score)} marks`:'Set the score you are actually writing for.'}</span>
+    </div>
+  </div>
+  ${list.length?`<div class="grid2">
+    <div class="card"><h3>Score trend</h3>${lineChart(labels,scores,720)}<p class="muted" style="font-size:10px;margin-top:8px">Solid line is the paper. Not a 3-test average — that lives in the mean card.</p></div>
+    <div class="card"><h3>Unofficial band</h3><p style="font-size:22px;font-weight:800;margin:8px 0 6px">${band[0]}</p><p class="muted" style="font-size:12px;line-height:1.6">${band[1]}</p>
+      <div class="list-item"><span>Accuracy</span><b>${Math.round(lt.accuracy*100)}%</b></div>
+      <div class="list-item"><span>Attempted</span><b>${lt.attempted} / 180</b></div>
+      <div class="list-item"><span>Burned on wrongs</span><b style="color:var(--red)">−${lt.burned}</b></div>
+      <div class="list-item"><span>Left blank</span><b>${lt.skipped} Q · up to ${lt.left}</b></div>
+      <div class="list-item"><span>Softest subject</span><b>${weak[1]}</b></div>
+    </div>
+  </div>
+  <div class="grid2" style="margin-top:14px">
+    <div class="card">
+      <div class="section-head" style="margin-top:0"><h2>Subject split</h2>
+        <select onchange="setMockLabFocus(this.value)" style="max-width:220px">${list.map(m=>`<option value="${m.id}" ${m.id===(focused&&focused.id)?'selected':''}>${esc(m.date)} · ${esc(m.name)}</option>`).join('')}</select>
+      </div>
+      ${LAB_KEYS.map(([k,label,cap,max])=>{const a=focused[k]||{c:0,w:0};const sc=labPart(a);const w=Math.max(0,Math.min(100,sc/max*100));return `<div class="progress-row"><div class="progress-meta"><span>${label}</span><span>${a.c} right · ${a.w} wrong · ${sc}/${max}</span></div><div class="bar"><span style="width:${w}%"></span></div></div>`}).join('')}
+    </div>
+    <div class="card">
+      <h3>If wrongs become rights</h3>
+      <p class="muted" style="font-size:12px;line-height:1.6">One converted mistake is 5 marks: you stop losing 1 and start gaining 4.</p>
+      <p style="font-size:32px;font-weight:800;margin:10px 0 0">${flipped}</p>
+      <p class="muted" style="font-size:12px">+${flipped-ft.score} if ${flip} wrongs flip · now ${ft.score} · ${ft.wrong} wrongs on this paper</p>
+      <input class="lab-range" type="range" min="0" max="${Math.max(1,ft.wrong)}" value="${flip}" oninput="setMockLabFix(this.value)">
+      <p class="muted" style="font-size:12px;margin-top:8px">${target-flipped>0?`${target-flipped} still short of ${target}.`:`That fix clears ${target} on this paper.`}</p>
+      <p class="muted" style="font-size:12px;line-height:1.6;margin-top:10px">${lt.accuracy<0.75?`${weak[1]} is the softest percent, and accuracy is ${Math.round(lt.accuracy*100)}%. Cutting wrongs there moves the total faster than attempting the ${lt.skipped} left blank.`:`${Math.round(lt.accuracy*100)}% accuracy is usable. ${weak[1]} is still the drag.`}</p>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px"><h3>Papers</h3><div class="table-wrap"><table><thead><tr><th>PAPER</th><th>P</th><th>C</th><th>BOT</th><th>ZOO</th><th>SCORE</th><th>ACC</th><th></th></tr></thead><tbody>
+    ${list.slice().reverse().map(m=>{const t=labTotals(m);return `<tr><td><b>${esc(m.name)}</b><div class="muted">${esc(m.date)}</div></td>${LAB_KEYS.map(([k])=>`<td>${labPart(m[k])}</td>`).join('')}<td><b>${t.score}</b></td><td>${Math.round(t.accuracy*100)}%</td><td><button class="icon-btn" onclick="deleteMockLab('${m.id}')">×</button></td></tr>`}).join('')}
+  </tbody></table></div></div>`:'<div class="card"><div class="empty">No Mock Lab papers yet. Neeche right / wrong daalo — Physics aur Chemistry 45, Botany aur Zoology 45. +4 / −1.</div></div>'}
+  <div class="card" style="margin-top:14px"><h3>Log a paper</h3>
+    <form id="mockLabForm">
+      <div class="form-grid">
+        <div class="field"><label>NAME</label><input name="name" required placeholder="Full syllabus 10"></div>
+        <div class="field"><label>DATE</label><input name="date" type="date" value="${today()}" required></div>
+      </div>
+      <div class="lab-grid">
+        ${LAB_KEYS.map(([k,label,cap])=>`<fieldset class="sub-group-box" style="margin:0"><div class="sub-group-title">${label} · ${cap} Q</div><div class="form-grid"><div class="field"><label>RIGHT</label><input name="${k}C" inputmode="numeric" value="0"></div><div class="field"><label>WRONG</label><input name="${k}W" inputmode="numeric" value="0"></div></div></fieldset>`).join('')}
+      </div>
+      <button class="btn" style="margin-top:12px">Save paper</button>
+    </form>
+  </div>`;
+}
+
 function render(){
-  let html={dashboard,missions,subjects,focus,practice:practiceView,mistakes,revision,tests,vault,aitutor:aiTutorView,analytics}[current]();
+  let html={dashboard,missions,subjects,focus,practice:practiceView,mistakes,revision,tests,mocklab:mockLabView,vault,aitutor:aiTutorView,analytics}[current]();
   document.getElementById('view').innerHTML=html;
   bindForms();
   updateTopFocusUI();
+  updateStreakBadge();
   if(current==='dashboard')startLiveCountdown();
   if(current==='practice' && practiceTab==='quiz' && activeQuiz && quizIdx<activeQuiz.length)startQuizStopwatch();
   if(current==='focus'){
@@ -2053,6 +2196,19 @@ function bindForms(){
     if(file){try{meta=await storeFile(file)}catch(_){toast('File save nahi hui, bina file ke save kar raha hoon.')}}
     db.tests.push({id:crypto.randomUUID(),date:today(),name:f.name.value.trim(),score:finalScore,accuracy:+f.accuracy.value||0,physics:p,chemistry:c,biology:b,analysis:'',analysisDone:!!(f.analysisDone&&f.analysisDone.checked),...(meta?{fileId:meta.id,fileName:meta.name,fileType:meta.type}:{})});
     save();render();toast('Mock test saved.');
+  });
+  bind('mockLabForm',f=>{
+    const paper={id:crypto.randomUUID(),name:f.name.value.trim(),date:f.date.value||today()};
+    for(const [k,label,cap] of LAB_KEYS){
+      const c=Math.floor(Number(f[k+'C'].value)||0);
+      const w=Math.floor(Number(f[k+'W'].value)||0);
+      if(c<0||w<0||c+w>cap){toast(`${label}: right + wrong cannot pass ${cap}.`);return}
+      paper[k]={c,w};
+    }
+    db.mockLabs=db.mockLabs||[];
+    db.mockLabs.push(paper);
+    mockLabFocusId=paper.id;
+    save();render();toast('Mock Lab paper saved.');
   });
 }
 
