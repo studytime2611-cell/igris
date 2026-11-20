@@ -202,3 +202,10 @@ footer span{color:var(--red)}
 .pdf-pages{display:flex;flex-direction:column;align-items:center;gap:10px}
 .pdf-page{width:100%;display:flex;justify-content:center;align-items:center}
 .pdf-page canvas{max-width:100%;border-radius:6px;background:#fff;display:block}
+.chip-wrap{display:flex;flex-wrap:wrap;gap:6px;max-height:150px;overflow:auto;margin:0 0 14px}
+.vault-group-title{font:600 11px 'DM Mono',monospace;letter-spacing:1px;color:#e7c477;margin:16px 0 8px}
+details.group{border:1px solid #25242d;border-radius:10px;margin-bottom:10px;background:#0c0c12}
+details.group>summary{cursor:pointer;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;list-style:none;font-size:12px}
+details.group>summary::-webkit-details-marker{display:none}
+details.group[open]>summary{border-bottom:1px solid #25242d}
+details.group .group-body{padding:0 12px}

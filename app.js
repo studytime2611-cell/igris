@@ -26,6 +26,8 @@ let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=nu
 let activeQuiz=null, activeQuizMeta={subject:'All',chapter:'All'}, quizIdx=0, quizScore=0, quizAnswered=false, quizPickedIdx=null, quizWrongList=[], quizElapsedSec=0, retestIdx=0, aiOutput='';
 let topBannerHidden=false, activeReminderTaskId=null;
 let timerEndAt=0, timerLabel='', wakeLock=null, ongoingNotifLast=0;
+let timerMissionId=null, missionRanSecs=0, runStartedAt=0, missionSessionId=null, lastMissionFlush=0;
+let vaultChapterFilter='All', mistakeOpenGroups=new Set(), activeQuizKey=null, activeQuizArgs=null;
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -249,7 +251,11 @@ window.toggleTimerFullscreen=async force=>{
     try{if(wakeLock){await wakeLock.release();wakeLock=null}}catch(_){}
   }
 };
-window.resetCurrentTimer=()=>setTimer(Math.round(timerInitial/60)||25);
+window.resetCurrentTimer=()=>{
+  const keepId=timerMissionId, keepLabel=timerLabel;
+  setTimer(Math.round(timerInitial/60)||25);
+  if(keepId){timerMissionId=keepId;timerLabel=keepLabel;updateTimerDOM();refreshFocusPanels()}
+};
 
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape' && document.body.classList.contains('zen-mode'))toggleZenMode(false);
@@ -597,9 +603,13 @@ window.startMissionFocus=(id)=>{
   const t=db.tasks.find(x=>x.id===id);
   const mins=parseInt(t?.focusMins,10);
   if(!t||!mins||mins<1){toast('Is mission ki focus duration set nahi hai.');return}
+  pauseMissionClock();
+  flushMissionSession();
   clearInterval(timerInterval);
   timerRunning=false;
   timerEndAt=0;
+  resetMissionRun();
+  timerMissionId=t.id;
   timerLabel=t.text;
   closeOngoingNotif();
   topBannerHidden=false;
@@ -808,6 +818,56 @@ function timerParts(sec){
   return {h:pad2(h),m:pad2(m),s:pad2(s)};
 }
 
+function missionRunSecs(){return missionRanSecs+(runStartedAt?(Date.now()-runStartedAt)/1000:0)}
+function pauseMissionClock(){if(timerMissionId&&runStartedAt){missionRanSecs+=(Date.now()-runStartedAt)/1000;runStartedAt=0}}
+function resetMissionRun(){missionRanSecs=0;runStartedAt=0;missionSessionId=null}
+function flushMissionSession(){
+  if(!timerMissionId)return;
+  const secs=Math.round(missionRunSecs());
+  const mins=Math.round(secs/60);
+  const t=db.tasks.find(x=>x.id===timerMissionId);
+  let rec=missionSessionId?db.sessions.find(x=>x.id===missionSessionId):null;
+  if(!rec){
+    if(mins<1)return;
+    rec={id:crypto.randomUUID(),date:today(),subject:(t&&t.subject)||'Focus Timer',minutes:mins,questions:0,topic:(t&&t.text)||timerLabel||'Mission focus',missionId:timerMissionId,plannedMins:Math.round(timerInitial/60),seconds:secs};
+    db.sessions.push(rec);
+    missionSessionId=rec.id;
+  }else{rec.minutes=mins;rec.seconds=secs}
+  save();
+  refreshFocusPanels();
+}
+window.missionRowAction=id=>{
+  if(timerMissionId===id){
+    if(timerRunning){startTimer();return}
+    if(timerSeconds>0&&timerSeconds<timerInitial){startTimer();return}
+  }
+  startMissionFocus(id);
+  startTimer();
+};
+function missionFocusRowsHTML(){
+  const list=db.tasks.filter(t=>t.focusMins>0&&(!t.done||t.date===today())).sort((a,b)=>(a.done?1:0)-(b.done?1:0)||String(a.date).localeCompare(String(b.date)));
+  if(!list.length)return '<div class="empty">Koi mission focus time ke saath nahi hai. Daily Missions me mission add karte waqt focus minutes daalo.</div>';
+  return list.map(t=>{
+    const used=db.sessions.filter(x=>x.date===today()&&x.missionId===t.id).reduce((a,x)=>a+x.minutes,0);
+    const active=timerMissionId===t.id;
+    const running=active&&timerRunning;
+    const label=running?'⏸ Pause':(active&&timerSeconds>0&&timerSeconds<timerInitial?'▶ Resume':'▶ Start');
+    return `<div class="list-item" style="gap:8px;${active?'border-left:3px solid #e33b4b;padding-left:8px':''}">
+      <div style="min-width:0;flex:1"><b style="font-size:12px;${t.done?'text-decoration:line-through;opacity:.6':''}">${esc(t.text)}</b>
+        <div class="muted" style="font-size:10px;margin-top:3px">${esc(t.subject||'GENERAL')} • planned ${t.focusMins}m${used?` • <span style="color:${used>=t.focusMins?'#86efac':'#e7c477'}">${used}m of ${t.focusMins}m used today</span>`:''}${running?' • <b style="color:#fca5a5">RUNNING</b>':''}</div></div>
+      <button type="button" class="btn ${running?'':'secondary'}" style="padding:6px 12px;white-space:nowrap" onclick="missionRowAction('${t.id}')">${label}</button>
+    </div>`;
+  }).join('');
+}
+function todaySessionsHTML(){
+  return db.sessions.filter(s=>s.date===today()).map(s=>`<div class="list-item"><span>${esc(s.subject)} — ${esc(s.topic||'Study session')}${s.questions?` <span class="tag blue">${s.questions} Qs</span>`:''}${s.plannedMins&&s.minutes<s.plannedMins?` <span class="tag gold">${s.minutes}m of ${s.plannedMins}m planned</span>`:''}</span><div style="display:flex;align-items:center;gap:8px"><b>${s.minutes}m</b><button type="button" class="icon-btn" style="padding:2px 6px" onclick="removeItem('sessions','${s.id}')">×</button></div></div>`).join('')||'<div class="empty">No sessions logged today.</div>';
+}
+function refreshFocusPanels(){
+  const a=document.getElementById('missionFocusList');if(a)a.innerHTML=missionFocusRowsHTML();
+  const b=document.getElementById('todaySessionsList');if(b)b.innerHTML=todaySessionsHTML();
+  const c=document.getElementById('todaySessionsMeta');if(c)c.textContent=`${totalMinutes()} MIN • ${totalQuestionsToday()} Qs`;
+}
+
 function focus(){
   title('Focus Room');
   const {h,m,s}=timerParts(timerSeconds);
@@ -844,20 +904,24 @@ function focus(){
       <p class="muted" id="tickDebug" style="font-size:9px;margin-top:6px"></p>
     </div>
     <div class="card">
-      <h3>Log a completed study session</h3>
-      <form id="sessionForm">
-        <div class="form-grid">
-          <div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option><option>Revision</option></select></div>
-          <div class="field"><label>DURATION (MINUTES)</label><input name="minutes" type="number" min="1" max="1440" placeholder="e.g. 50" required></div>
-        </div>
-        <div class="form-grid">
-          <div class="field"><label>WHAT DID YOU WORK ON?</label><input name="topic" placeholder="e.g. Electrostatics numericals"></div>
-          <div class="field"><label>MCQS SOLVED (OPTIONAL)</label><input name="questions" type="number" min="0" max="500" placeholder="e.g. 45"></div>
-        </div>
-        <button type="submit" class="btn">Save session</button>
-      </form>
-      <div class="section-head"><h2>Today's sessions</h2><small>${totalMinutes()} MIN • ${totalQuestionsToday()} Qs</small></div>
-      ${db.sessions.filter(s=>s.date===today()).map(s=>`<div class="list-item"><span>${esc(s.subject)} — ${esc(s.topic||'Study session')}${s.questions?` <span class="tag blue">${s.questions} Qs</span>`:''}</span><div style="display:flex;align-items:center;gap:8px"><b>${s.minutes}m</b><button type="button" class="icon-btn" style="padding:2px 6px" onclick="removeItem('sessions','${s.id}')">×</button></div></div>`).join('')||'<div class="empty">No sessions logged today.</div>'}
+      <h3>Mission focus timers</h3>
+      <p class="muted" style="font-size:10px;line-height:1.6;margin-bottom:8px">Mission pe ▶ dabao, timer start ho jayega. Jitna timer chalega utna hi save hoga (planned se kam chala to wo bhi dikhega).</p>
+      <div id="missionFocusList">${missionFocusRowsHTML()}</div>
+      <details class="group" style="margin-top:14px"><summary><b>＋ Manual log (optional)</b></summary><div class="group-body" style="padding-bottom:12px">
+        <form id="sessionForm">
+          <div class="form-grid">
+            <div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option><option>Revision</option></select></div>
+            <div class="field"><label>DURATION (MINUTES)</label><input name="minutes" type="number" min="1" max="1440" placeholder="e.g. 50" required></div>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>WHAT DID YOU WORK ON?</label><input name="topic" placeholder="e.g. Electrostatics numericals"></div>
+            <div class="field"><label>MCQS SOLVED (OPTIONAL)</label><input name="questions" type="number" min="0" max="500" placeholder="e.g. 45"></div>
+          </div>
+          <button type="submit" class="btn">Save session</button>
+        </form>
+      </div></details>
+      <div class="section-head"><h2>Today's sessions</h2><small id="todaySessionsMeta">${totalMinutes()} MIN • ${totalQuestionsToday()} Qs</small></div>
+      <div id="todaySessionsList">${todaySessionsHTML()}</div>
     </div>
   </div>`;
 }
@@ -874,6 +938,10 @@ function updateTimerDOM(){
   updateTimerFullDOM();
 }
 window.setTimer=m=>{
+  pauseMissionClock();
+  flushMissionSession();
+  timerMissionId=null;
+  resetMissionRun();
   clearInterval(timerInterval);
   timerRunning=false;
   timerEndAt=0;
@@ -906,7 +974,14 @@ function finishTimer(){
   timerRunning=false;
   timerEndAt=0;
   const completedMins=Math.max(1,Math.round(timerInitial/60));
-  db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,questions:0,topic:'Completed flip timer session'});
+  if(timerMissionId){
+    runStartedAt=0;
+    missionRanSecs=timerInitial;
+    flushMissionSession();
+    resetMissionRun();
+  }else{
+    db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,questions:0,topic:'Completed flip timer session'});
+  }
   save();
   toast(`Focus complete! ${completedMins} min session logged.`);
   sendTopNotification('⏰ IGRIS Focus Complete!',`${completedMins} min focus session logged.`,'igris-focus-timer',{requireInteraction:true,renotify:true,silent:false,vibrate:[300,150,300,150,600]});
@@ -921,6 +996,7 @@ function timerTick(){
     if(dbg)dbg.textContent='sync '+new Date().toLocaleTimeString('en-IN');
     if(timerSeconds<=0){finishTimer();return}
     updateOngoingNotif(false);
+    if(timerMissionId&&Date.now()-lastMissionFlush>15000){lastMissionFlush=Date.now();flushMissionSession()}
   }catch(e){console.error('timerTick',e)}
 }
 function startTimer(){
@@ -928,15 +1004,20 @@ function startTimer(){
     timerTick();
     if(!timerRunning)return;
     clearInterval(timerInterval);
+    pauseMissionClock();
     timerRunning=false;
     timerEndAt=0;
     closeOngoingNotif();
+    flushMissionSession();
     setTimerStateText('PAUSED');
     updateTimerDOM();
+    refreshFocusPanels();
     return;
   }
   if(timerSeconds<=0)timerSeconds=timerInitial;
   timerRunning=true;
+  if(timerMissionId)runStartedAt=Date.now();
+  lastMissionFlush=Date.now();
   topBannerHidden=false;
   timerEndAt=Date.now()+timerSeconds*1000;
   ongoingNotifLast=0;
@@ -944,6 +1025,7 @@ function startTimer(){
   timerInterval=setInterval(timerTick,500);
   setTimerStateText('FOCUS SESSION ACTIVE');
   updateTimerDOM();
+  refreshFocusPanels();
   setTimeout(()=>{try{updateOngoingNotif(true)}catch(_){}},0);
 }
 
@@ -966,7 +1048,7 @@ function markBadgeStyle(mk){
 window.setPracticeTab=t=>{clearInterval(quizClockInterval);practiceTab=t;render()};
 window.setAttemptChapterFilter=ch=>{attemptChapterFilter=ch;render()};
 window.selectQuizSubject=sub=>{selectedQuizSubject=sub;render()};
-window.exitActiveQuiz=()=>{clearInterval(quizClockInterval);activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;render()};
+window.exitActiveQuiz=()=>{clearInterval(quizClockInterval);saveQuizProgress();activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;render()};
 window.launchChapterBtn=btn=>{
   const sub=btn?.dataset?.sub||'All';
   const chap=btn?.dataset?.chap||'All';
@@ -1007,7 +1089,31 @@ window.loadSampleJson=()=>{
   if(ta){ta.value=SAMPLE_JSON;toast('Sample NEET JSON loaded.')}
 };
 
-function beginQuizSession(items,meta){
+function quizKey(sub,chap,mark){return [sub,chap,mark].map(x=>String(x||'All').trim().toLowerCase()).join('|')}
+function saveQuizProgress(){
+  if(!activeQuizKey||!activeQuiz)return;
+  db.quizProgress=db.quizProgress||{};
+  if(quizIdx>=activeQuiz.length){delete db.quizProgress[activeQuizKey];save();return}
+  db.quizProgress[activeQuizKey]={ids:activeQuiz.map(q=>q.id),idx:quizIdx,score:quizScore,wrong:quizWrongList,elapsed:quizElapsedSec,answered:quizAnswered,picked:quizPickedIdx,meta:activeQuizMeta,updatedAt:Date.now()};
+  save();
+}
+window.restartActiveQuiz=()=>{
+  if(!activeQuizKey||!activeQuizArgs){toast('Is quiz ko restart nahi kar sakte.');return}
+  if(!confirm('Quiz reset karke pehle question se shuru karein?'))return;
+  const args=activeQuizArgs;
+  if(db.quizProgress)delete db.quizProgress[activeQuizKey];
+  save();
+  clearInterval(quizClockInterval);
+  activeQuiz=null;
+  startSavedQuiz(args[0],args[1],args[2]);
+};
+window.resetChapterProgress=btn=>{
+  const key=quizKey(btn.dataset.sub,btn.dataset.chap,'All');
+  if(db.quizProgress&&db.quizProgress[key]){delete db.quizProgress[key];save();render();toast('Is chapter ka progress reset ho gaya.')}
+};
+function beginQuizSession(items,meta,key=null,args=null){
+  activeQuizKey=key;
+  activeQuizArgs=args;
   activeQuiz=items.map(x=>({...x,mark:normalizeMark(x.mark||x.tag)}));
   activeQuizMeta=meta;
   quizIdx=0;
@@ -1080,7 +1186,26 @@ window.startSavedQuiz=(subFilter='All',chapFilter='All',markFilter='All')=>{
   });
   if(!pool.length){toast(`No ${targetMark==='All'?'saved':targetMark} MCQs found for this selection.`);return}
   const labelChap=chapFilter==='All'?(targetMark==='All'?'All Chapters':`${targetMark} Marked`):chapFilter;
-  beginQuizSession(pool,{subject:subFilter,chapter:labelChap});
+  const key=quizKey(subFilter,chapFilter,markFilter);
+  const prog=(db.quizProgress||{})[key];
+  if(prog&&prog.ids&&prog.idx<prog.ids.length){
+    const bank=db.quizzes||[];
+    const rebuilt=prog.ids.map(id=>bank.find(q=>q.id===id)).filter(Boolean);
+    if(rebuilt.length===prog.ids.length){
+      activeQuiz=rebuilt.map(x=>({...x,mark:normalizeMark(x.mark||x.tag)}));
+      activeQuizMeta=prog.meta||{subject:subFilter,chapter:labelChap};
+      activeQuizKey=key;
+      activeQuizArgs=[subFilter,chapFilter,markFilter];
+      quizIdx=prog.idx;quizScore=prog.score||0;quizWrongList=prog.wrong||[];quizElapsedSec=prog.elapsed||0;
+      quizAnswered=!!prog.answered;quizPickedIdx=quizAnswered?prog.picked:null;
+      practiceTab='quiz';
+      render();
+      toast(`Resume: Q${quizIdx+1}/${activeQuiz.length}. Naya shuru karna ho to ↺ Restart dabao.`);
+      return;
+    }
+    delete db.quizProgress[key];
+  }
+  beginQuizSession(pool,{subject:subFilter,chapter:labelChap},key,[subFilter,chapFilter,markFilter]);
 };
 
 window.retryAttemptWrongQuestions=(attemptId)=>{
@@ -1129,6 +1254,7 @@ function saveQuizAttemptIfDone(){
     marksSummary:activeQuiz.map(q=>({q:q.q,mark:normalizeMark(q.mark||q.tag)})),
     wrongItems:quizWrongList.slice()
   });
+  if(activeQuizKey&&db.quizProgress)delete db.quizProgress[activeQuizKey];
   save();
   toast(`Attempt saved (${acc}% • ${avgSec}s/Q)!`);
 }
@@ -1159,7 +1285,7 @@ window.answerQuizOpt=(choiceIdx)=>{
       toast('Saved to Mistake Hunter with True Answer.');
     }
   }
-  if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();
+  if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();else saveQuizProgress();
   render();
 };
 
@@ -1167,6 +1293,7 @@ window.nextQuizQuestion=()=>{
   quizIdx++;
   quizAnswered=false;
   quizPickedIdx=null;
+  saveQuizProgress();
   render();
 };
 
@@ -1180,6 +1307,7 @@ window.deleteAttempt=(id)=>{
 window.clearSavedQuizzes=()=>{
   if(!confirm('Delete all imported MCQs?'))return;
   db.quizzes=[];
+  db.quizProgress={};
   activeQuiz=null;
   save();
   render();
@@ -1236,6 +1364,7 @@ function practiceView(){
           <h3>${activeQuiz && quizIdx < activeQuiz.length ? `Active Quiz (${quizIdx+1}/${activeQuiz.length}) • Score: ${quizScore}` : activeQuiz && quizIdx >= activeQuiz.length ? 'Quiz Completed & Saved!' : selectedQuizSubject ? `${selectedQuizSubject} — Select Chapter` : 'MCQ Quiz Runner'}</h3>
           <div class="actions" style="align-items:center">
             ${activeQuiz && quizIdx < activeQuiz.length ? `<span class="tag gold" style="font-size:11px">⏱ <b id="quizLiveClock">${fmtMMSS(quizElapsedSec)}</b> • ${Math.max(1,Math.round(quizElapsedSec/Math.max(quizIdx+(quizAnswered?1:0),1)))}s/Q</span>` : ''}
+            ${activeQuiz && quizIdx<activeQuiz.length && activeQuizKey ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="restartActiveQuiz()">↺ Restart</button>` : ''}
             ${activeQuiz ? `<button type="button" class="btn secondary" style="padding:5px 10px" onclick="exitActiveQuiz()">← Back</button>` : selectedQuizSubject ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="selectQuizSubject(null)">← Back</button>` : ''}
           </div>
         </div>
@@ -1296,9 +1425,11 @@ function practiceView(){
             <div style="max-height:320px;overflow:auto">
               ${chList.map(ch=>{
                 const cnt=subBank.filter(x=>String(x.chapter||'').trim().toLowerCase()===ch.trim().toLowerCase()).length;
+                const pg=(db.quizProgress||{})[quizKey(selectedQuizSubject,ch,'All')];
+                const hasPg=pg&&pg.ids&&pg.idx<pg.ids.length;
                 return `<div class="list-item">
-                  <span><b>${esc(ch)}</b> <span class="tag ${cnt?'green':''}">${cnt} Qs ready</span></span>
-                  <button type="button" class="btn ${cnt?'secondary':'ghost'}" style="padding:5px 10px" data-sub="${esc(selectedQuizSubject)}" data-chap="${esc(ch)}" onclick="launchChapterBtn(this)">Start Chapter</button>
+                  <span><b>${esc(ch)}</b> <span class="tag ${cnt?'green':''}">${cnt} Qs ready</span>${hasPg?` <span class="tag gold">Q${pg.idx+1}/${pg.ids.length} saved</span>`:''}</span>
+                  <span style="display:flex;gap:6px;align-items:center">${hasPg?`<button type="button" class="btn ghost" style="padding:5px 9px" title="Reset progress" data-sub="${esc(selectedQuizSubject)}" data-chap="${esc(ch)}" onclick="resetChapterProgress(this)">↺</button>`:''}<button type="button" class="btn ${cnt?'secondary':'ghost'}" style="padding:5px 10px" data-sub="${esc(selectedQuizSubject)}" data-chap="${esc(ch)}" onclick="launchChapterBtn(this)">${hasPg?'▶ Resume':'Start Chapter'}</button></span>
                 </div>`;
               }).join('')}
             </div>
@@ -1519,6 +1650,35 @@ window.onMistakeChapterPick=(val)=>{
   if(inp)inp.value=val;
 };
 
+window.toggleMistakeGroup=el=>{const k=el.dataset.key;if(el.open)mistakeOpenGroups.add(k);else mistakeOpenGroups.delete(k)};
+function mistakeItemHTML(m){
+  const isWrongMcq=!m.closed && String(m.error||'').includes('Wrong MCQ');
+  return `<div class="list-item" style="align-items:flex-start;${isWrongMcq?'background:#2a0d14;border:1px solid #8f1e2b':''}">
+          <div>
+            <b>${esc(m.chapter)}</b> ${isWrongMcq?'<span class="tag" style="background:#5e141f;color:#fca5a5;border-color:#ef4444">WRONG MCQ</span>':''}
+            <div class="muted" style="margin:4px 0">${esc(m.subject)} • ${esc(m.type)} • ${m.date}</div>
+            <div style="${isWrongMcq?'color:#fecaca;font-weight:600':''}">${esc(m.error)}</div>
+            ${m.fix?`<div style="color:#86efac;margin-top:5px"><b>True Answer / Fix:</b> ${esc(m.fix)}</div>`:''}
+            <div class="actions" style="margin-top:8px">
+              <button type="button" class="btn ${m.closed?'ghost':'secondary'}" style="padding:6px 10px" onclick="toggleMistake('${m.id}')">${m.closed?'↺ Reopen':'✓ Mark fixed'}</button>
+              ${m.fileId?`<button type="button" class="btn ghost" style="padding:6px 10px" onclick="previewFile('${m.fileId}')">📎 View ${m.fileType==='application/pdf'?'PDF':'Screenshot'}</button>`:''}
+            </div>
+          </div>
+          <button type="button" class="icon-btn" onclick="deleteMistake('${m.id}')">×</button>
+        </div>`;
+}
+function mistakeGroupsHTML(ml){
+  const g={};
+  ml.slice().reverse().forEach(m=>{
+    const ch=String(m.chapter||'General').trim()||'General';
+    const k=mistakeTab+'|'+(m.subject||'')+'|'+ch.toLowerCase();
+    (g[k]=g[k]||{key:k,subject:m.subject||'',chapter:ch,list:[]}).list.push(m);
+  });
+  const arr=Object.values(g).sort((a,b)=>b.list.length-a.list.length||a.chapter.localeCompare(b.chapter));
+  return `<div class="muted" style="font-size:10px;margin-bottom:10px">${ml.length} ${mistakeTab==='open'?'wrong':'fixed'} • ${arr.length} chapters (chapter pe tap karke kholo)</div>`
+    +arr.map(x=>`<details class="group" data-key="${esc(x.key)}" ${mistakeOpenGroups.has(x.key)?'open':''} ontoggle="toggleMistakeGroup(this)"><summary><span><b>📂 ${esc(x.chapter)}</b> <span class="muted" style="font-size:10px">${esc(x.subject)}</span></span><span class="tag ${mistakeTab==='open'?'':'green'}">${x.list.length} ${mistakeTab==='open'?'wrong':'fixed'}</span></summary><div class="group-body">${x.list.map(mistakeItemHTML).join('')}</div></details>`).join('');
+}
+
 function mistakes(){
   title('Mistake Hunter');
   const mo=db.mistakes.filter(x=>!x.closed),mc=db.mistakes.filter(x=>x.closed),ml=mistakeTab==='open'?mo:mc;
@@ -1548,22 +1708,7 @@ function mistakes(){
     <div class="card">
       <h3>Learning log</h3>
       ${tabsHTML(mistakeTab,mo.length,mc.length,'setMistakeTab')}
-      ${ml.length?ml.slice().reverse().map(m=>{
-        const isWrongMcq=!m.closed && String(m.error||'').includes('Wrong MCQ');
-        return `<div class="list-item" style="align-items:flex-start;${isWrongMcq?'background:#2a0d14;border:1px solid #8f1e2b':''}">
-          <div>
-            <b>${esc(m.chapter)}</b> ${isWrongMcq?'<span class="tag" style="background:#5e141f;color:#fca5a5;border-color:#ef4444">WRONG MCQ</span>':''}
-            <div class="muted" style="margin:4px 0">${esc(m.subject)} • ${esc(m.type)} • ${m.date}</div>
-            <div style="${isWrongMcq?'color:#fecaca;font-weight:600':''}">${esc(m.error)}</div>
-            ${m.fix?`<div style="color:#86efac;margin-top:5px"><b>True Answer / Fix:</b> ${esc(m.fix)}</div>`:''}
-            <div class="actions" style="margin-top:8px">
-              <button type="button" class="btn ${m.closed?'ghost':'secondary'}" style="padding:6px 10px" onclick="toggleMistake('${m.id}')">${m.closed?'↺ Reopen':'✓ Mark fixed'}</button>
-              ${m.fileId?`<button type="button" class="btn ghost" style="padding:6px 10px" onclick="previewFile('${m.fileId}')">📎 View ${m.fileType==='application/pdf'?'PDF':'Screenshot'}</button>`:''}
-            </div>
-          </div>
-          <button type="button" class="icon-btn" onclick="deleteMistake('${m.id}')">×</button>
-        </div>`;
-      }).join(''):`<div class="empty">${mistakeTab==='open'?'No open mistakes. Add one after your next practice session.':'Nothing closed yet.'}</div>`}
+      ${ml.length?mistakeGroupsHTML(ml):`<div class="empty">${mistakeTab==='open'?'No open mistakes. Add one after your next practice session.':'Nothing closed yet.'}</div>`}
     </div>
   </div>`;
 }
@@ -1575,7 +1720,13 @@ window.deleteMistake=async(id)=>{
   save();render();toast('Mistake removed.');
 };
 
-window.setVaultFilter=f=>{vaultFilter=f;render()};
+window.setVaultFilter=f=>{vaultFilter=f;vaultChapterFilter='All';render()};
+window.setVaultChapterFilter=ch=>{vaultChapterFilter=ch;render()};
+function chapterOptionsHTML(sub,selected=''){
+  const list=(sub&&sub!=='Formula / Notes')?getChaptersForSubject(sub):[];
+  return '<option value="">— General (no chapter) —</option>'+list.map(ch=>`<option value="${esc(ch)}" ${ch===selected?'selected':''}>${esc(ch)}</option>`).join('');
+}
+window.refreshVaultChapters=sub=>{const sel=document.getElementById('vaultChapterSelect');if(sel)sel.innerHTML=chapterOptionsHTML(sub)};
 window.openVaultLink=id=>{
   const v=(db.vault||[]).find(x=>x.id===id);
   if(v&&/^https?:\/\//i.test(v.link||''))window.open(v.link,'_blank','noopener');
@@ -1592,24 +1743,57 @@ window.deleteVaultItem=async(id)=>{
   save();render();toast('File removed from Study Vault.');
 };
 
+function vaultCardHTML(v){
+  return `
+          <div class="vault-card">
+            <div class="vault-thumb" onclick="openVaultItem('${v.id}')">
+              <div class="pdf-badge">${!v.fileId?'🔗 ONLINE LINK (DRIVE)':(v.fileType==='application/pdf'?'📄 PDF DOCUMENT':'🖼 SCREENSHOT / IMAGE')}<div style="font-size:9px;color:#8f8d99;margin-top:4px;text-align:center">Tap to open</div></div>
+            </div>
+            <div>
+              <b style="font-size:12px;display:block">${esc(v.title)}</b>
+              <div class="muted" style="font-size:10px;margin-top:3px">${esc(v.subject)}${v.chapter?' • '+esc(v.chapter):''} • ${esc(v.category)}</div>
+            </div>
+            <div class="actions" style="margin-top:auto">
+              <button type="button" class="btn secondary" style="flex:1;padding:6px" onclick="openVaultItem('${v.id}')">Open</button>${v.fileId&&v.link?`<button type="button" class="icon-btn" style="padding:5px 9px" title="Open Drive link" onclick="openVaultLink('${v.id}')">🔗</button>`:''}
+              <button type="button" class="icon-btn" style="padding:5px 9px" onclick="deleteVaultItem('${v.id}')">×</button>
+            </div>
+          </div>
+        `;
+}
+
 function vault(){
   title('Study Vault');
-  const items=(db.vault||[]).filter(v=>vaultFilter==='All'||v.subject===vaultFilter);
+  const all=db.vault||[];
+  const subjects4=['Physics','Chemistry','Biology','Formula / Notes'];
+  const hasChapters=vaultFilter!=='All'&&vaultFilter!=='Formula / Notes';
+  const chapList=hasChapters?getChaptersForSubject(vaultFilter):[];
+  const cnt=ch=>all.filter(v=>v.subject===vaultFilter&&(v.chapter||'')===ch).length;
+  const items=all.filter(v=>(vaultFilter==='All'||v.subject===vaultFilter)&&(vaultChapterFilter==='All'||(v.chapter||'')===vaultChapterFilter));
+  const formSubject=subjects4.includes(vaultFilter)?vaultFilter:'Physics';
+  const formChapter=hasChapters&&vaultChapterFilter!=='All'?vaultChapterFilter:'';
+  const groups={};
+  items.slice().reverse().forEach(v=>{const k=(v.subject||'')+'||'+(v.chapter||'');(groups[k]=groups[k]||{subject:v.subject||'',chapter:v.chapter||'',list:[]}).list.push(v)});
+  const gl=Object.values(groups).sort((a,b)=>subjects4.indexOf(a.subject)-subjects4.indexOf(b.subject)||a.chapter.localeCompare(b.chapter));
   return `<div class="section-head">
     <h2>NEET Material, Screenshots & PDFs</h2>
     <div class="actions">
       ${['All','Physics','Chemistry','Biology','Formula / Notes'].map(f=>`<button type="button" class="btn ${vaultFilter===f?'':'secondary'}" style="padding:6px 10px" onclick="setVaultFilter('${f}')">${f}</button>`).join('')}
     </div>
   </div>
+  ${hasChapters?`<div class="chip-wrap">
+    <button type="button" class="btn ${vaultChapterFilter==='All'?'':'secondary'}" style="padding:5px 9px;font-size:10px" data-ch="All" onclick="setVaultChapterFilter(this.dataset.ch)">All chapters</button>
+    ${chapList.map(ch=>`<button type="button" class="btn ${vaultChapterFilter===ch?'':'secondary'}" style="padding:5px 9px;font-size:10px" data-ch="${esc(ch)}" onclick="setVaultChapterFilter(this.dataset.ch)">${esc(ch)}${cnt(ch)?` (${cnt(ch)})`:''}</button>`).join('')}
+  </div>`:''}
   <div class="two-col">
     <div class="card">
       <h3>Upload Study Material</h3>
       <form id="vaultForm">
         <div class="field"><label>TITLE / TOPIC NAME</label><input name="title" required placeholder="e.g. Organic Named Reactions Mindmap"></div>
         <div class="form-grid">
-          <div class="field"><label>SUBJECT</label><select name="subject"><option>Physics</option><option>Chemistry</option><option>Biology</option><option>Formula / Notes</option></select></div>
+          <div class="field"><label>SUBJECT</label><select name="subject" onchange="refreshVaultChapters(this.value)">${subjects4.map(x=>`<option ${x===formSubject?'selected':''}>${x}</option>`).join('')}</select></div>
           <div class="field"><label>CATEGORY</label><select name="category"><option>Screenshot / Diagram</option><option>Short Notes PDF</option><option>DPP / Question Bank</option><option>NCERT Highlight</option></select></div>
         </div>
+        <div class="field"><label>CHAPTER</label><select name="chapter" id="vaultChapterSelect">${chapterOptionsHTML(formSubject,formChapter)}</select></div>
         <div class="field"><label>SELECT IMAGE OR PDF</label><input type="file" name="file" accept="image/*,application/pdf"></div>
         <div class="field"><label>OR DRIVE / ONLINE LINK (OPTIONAL)</label><input name="link" type="url" placeholder="https://drive.google.com/..."></div>
         <button type="submit" class="btn">⬆ Save to Study Vault</button>
@@ -1618,23 +1802,7 @@ function vault(){
     </div>
     <div class="card">
       <h3>Saved Files (${items.length})</h3>
-      ${items.length?`<div class="vault-grid">
-        ${items.slice().reverse().map(v=>`
-          <div class="vault-card">
-            <div class="vault-thumb" onclick="openVaultItem('${v.id}')">
-              <div class="pdf-badge">${!v.fileId?'🔗 ONLINE LINK (DRIVE)':(v.fileType==='application/pdf'?'📄 PDF DOCUMENT':'🖼 SCREENSHOT / IMAGE')}<div style="font-size:9px;color:#8f8d99;margin-top:4px;text-align:center">Tap to open</div></div>
-            </div>
-            <div>
-              <b style="font-size:12px;display:block">${esc(v.title)}</b>
-              <div class="muted" style="font-size:10px;margin-top:3px">${esc(v.subject)} • ${esc(v.category)}</div>
-            </div>
-            <div class="actions" style="margin-top:auto">
-              <button type="button" class="btn secondary" style="flex:1;padding:6px" onclick="openVaultItem('${v.id}')">Open</button>${v.fileId&&v.link?`<button type="button" class="icon-btn" style="padding:5px 9px" title="Open Drive link" onclick="openVaultLink('${v.id}')">🔗</button>`:''}
-              <button type="button" class="icon-btn" style="padding:5px 9px" onclick="deleteVaultItem('${v.id}')">×</button>
-            </div>
-          </div>
-        `).join('')}
-      </div>`:'<div class="empty">No screenshots or PDFs uploaded yet. Add your first formula sheet or question screenshot.</div>'}
+      ${items.length?gl.map(g=>`<div class="vault-group-title">📘 ${vaultFilter==='All'?esc(g.subject)+' • ':''}${esc(g.chapter||'General')} (${g.list.length})</div><div class="vault-grid">${g.list.map(vaultCardHTML).join('')}</div>`).join(''):'<div class="empty">No screenshots or PDFs uploaded yet. Add your first formula sheet or question screenshot.</div>'}
     </div>
   </div>`;
 }
@@ -1729,10 +1897,18 @@ window.deleteUpcomingTest=async id=>{
   save();render();toast('Upcoming test removed.');
 };
 
+window.toggleTestAnalysis=id=>{const t=db.tests.find(x=>x.id===id);if(t){t.analysisDone=!t.analysisDone;save();render()}};
+window.removeTest=async id=>{
+  const t=db.tests.find(x=>x.id===id);
+  if(t&&t.fileId)await deleteStoredFile(t.fileId);
+  db.tests=db.tests.filter(x=>x.id!==id);
+  save();render();toast('Record removed.');
+};
+
 function tests(){
   title('Mock Tests');
   let avg=db.tests.length?Math.round(db.tests.reduce((a,t)=>a+t.score,0)/db.tests.length):0;
-  return `<div class="stats">${stat('TESTS TAKEN',db.tests.length,'Total recorded')}${stat('AVERAGE SCORE',avg,'Out of 720')}${stat('BEST SCORE',db.tests.length?Math.max(...db.tests.map(t=>t.score)):0,'Out of 720')}${stat('LATEST ACCURACY',db.tests.length?db.tests[db.tests.length-1].accuracy+'%':'—','As entered')}</div>${upcomingTestsHTML()}<div class="two-col"><div class="card"><h3>Record mock test</h3><form id="testForm" oninput="autoCalcMockScore()"><div class="field"><label>TEST NAME</label><input name="name" placeholder="e.g. Full syllabus test 04" required></div><div class="form-grid"><div class="field"><label>SCORE ( / 720 )</label><input name="score" type="number" min="0" max="720" required></div><div class="field"><label>ACCURACY (%)</label><input name="accuracy" type="number" min="0" max="100" placeholder="e.g. 72"></div></div><div class="form-grid"><div class="field"><label>PHYSICS</label><input name="physics" type="number" min="0" max="180" placeholder="Score"></div><div class="field"><label>CHEMISTRY</label><input name="chemistry" type="number" min="0" max="180" placeholder="Score"></div></div><div class="field"><label>BIOLOGY</label><input name="biology" type="number" min="0" max="360" placeholder="Score"></div><div class="field"><label>ANALYSIS / NEXT ACTION</label><textarea name="analysis" placeholder="What needs attention before the next test?"></textarea></div><button class="btn">Save test</button></form></div><div class="card"><h3>Test history</h3>${db.tests.length?`<div class="table-wrap"><table><thead><tr><th>TEST</th><th>SCORE</th><th>P / C / B</th><th>ACCURACY</th><th>DATE</th><th></th></tr></thead><tbody>${db.tests.slice().reverse().map(t=>{const pcb=(t.physics||t.chemistry||t.biology)?`${t.physics||0} / ${t.chemistry||0} / ${t.biology||0}`:'—';return `<tr><td>${esc(t.name)}</td><td><b>${t.score}</b></td><td><span class="muted">${pcb}</span></td><td>${t.accuracy||'—'}%</td><td>${t.date}</td><td><button class="icon-btn" onclick="removeItem('tests','${t.id}')">×</button></td></tr>`}).join('')}</tbody></table></div>${db.tests.slice().reverse().slice(0,3).map(t=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><b style="font-size:11px">${esc(t.name)}</b><p class="muted" style="font-size:10px">${esc(t.analysis||'No analysis added.')}</p></div>`).join('')}`:'<div class="empty">No mock tests recorded yet.</div>'}</div></div>`;
+  return `<div class="stats">${stat('TESTS TAKEN',db.tests.length,'Total recorded')}${stat('AVERAGE SCORE',avg,'Out of 720')}${stat('BEST SCORE',db.tests.length?Math.max(...db.tests.map(t=>t.score)):0,'Out of 720')}${stat('LATEST ACCURACY',db.tests.length?db.tests[db.tests.length-1].accuracy+'%':'—','As entered')}</div>${upcomingTestsHTML()}<div class="two-col"><div class="card"><h3>Record mock test</h3><form id="testForm" oninput="autoCalcMockScore()"><div class="field"><label>TEST NAME</label><input name="name" placeholder="e.g. Full syllabus test 04" required></div><div class="form-grid"><div class="field"><label>SCORE ( / 720 )</label><input name="score" type="number" min="0" max="720" required></div><div class="field"><label>ACCURACY (%)</label><input name="accuracy" type="number" min="0" max="100" placeholder="e.g. 72"></div></div><div class="form-grid"><div class="field"><label>PHYSICS</label><input name="physics" type="number" min="0" max="180" placeholder="Score"></div><div class="field"><label>CHEMISTRY</label><input name="chemistry" type="number" min="0" max="180" placeholder="Score"></div></div><div class="field"><label>BIOLOGY</label><input name="biology" type="number" min="0" max="360" placeholder="Score"></div><div class="field"><label>ATTACH TEST PAPER / ANALYSIS (IMAGE OR PDF, OPTIONAL)</label><input type="file" name="file" accept="image/*,application/pdf"></div><label style="display:flex;align-items:center;gap:8px;font-size:12px;margin:2px 0 14px"><input type="checkbox" name="analysisDone" style="width:auto"> Analysis done ✅</label><button class="btn">Save test</button></form></div><div class="card"><h3>Test history</h3>${db.tests.length?`<div class="table-wrap"><table><thead><tr><th>TEST</th><th>SCORE</th><th>P / C / B</th><th>ACCURACY</th><th>DATE</th><th>ANALYSIS</th><th></th></tr></thead><tbody>${db.tests.slice().reverse().map(t=>{const pcb=(t.physics||t.chemistry||t.biology)?`${t.physics||0} / ${t.chemistry||0} / ${t.biology||0}`:'—';return `<tr><td>${esc(t.name)}</td><td><b>${t.score}</b></td><td><span class="muted">${pcb}</span></td><td>${t.accuracy||'—'}%</td><td>${t.date}</td><td style="white-space:nowrap"><button type="button" class="tag ${t.analysisDone?'green':''}" style="cursor:pointer;${t.analysisDone?'':'background:#4a1019;color:#fca5a5;border-color:#ef4444'}" onclick="toggleTestAnalysis('${t.id}')">${t.analysisDone?'✅ Done':'● Pending'}</button>${t.fileId?` <button type="button" class="icon-btn" style="padding:3px 7px" title="Open file" onclick="previewFile('${t.fileId}')">📎</button>`:''}</td><td><button class="icon-btn" onclick="removeTest('${t.id}')">×</button></td></tr>`}).join('')}</tbody></table></div>${db.tests.slice().reverse().slice(0,3).map(t=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><b style="font-size:11px">${esc(t.name)}</b><p class="muted" style="font-size:10px">${t.analysis?esc(t.analysis):(t.analysisDone?'Analysis done.':'Analysis pending.')}</p></div>`).join('')}`:'<div class="empty">No mock tests recorded yet.</div>'}</div></div>`;
 }
 function dayKeys(n){return Array.from({length:n},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(n-1-i));return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')})}
 function dayLabel(k){return new Date(k+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short'})}
@@ -1850,7 +2026,7 @@ function bindForms(){
     if(!fileInput&&!link){toast('File ya link me se kuch to daalo.');return}
     const saved=fileInput?await storeFile(fileInput):null;
     db.vault=db.vault||[];
-    db.vault.push({id:crypto.randomUUID(),date:today(),title:f.title.value.trim(),subject:f.subject.value,category:f.category.value,...(saved?{fileId:saved.id,fileName:saved.name,fileType:saved.type}:{}),...(link?{link}:{})});
+    db.vault.push({id:crypto.randomUUID(),date:today(),title:f.title.value.trim(),subject:f.subject.value,chapter:(f.chapter&&f.chapter.value)||'',category:f.category.value,...(saved?{fileId:saved.id,fileName:saved.name,fileType:saved.type}:{}),...(link?{link}:{})});
     save();render();toast('Saved to Study Vault.');
   });
   bind('revisionForm',f=>{
@@ -1868,11 +2044,14 @@ function bindForms(){
     db.upcomingTests.push({id:crypto.randomUUID(),name:f.elements.name.value.trim(),date:f.date.value,time:f.time.value||'',syllabus:f.syllabus.value.trim(),...(meta?{fileId:meta.id,fileName:meta.name,fileType:meta.type}:{})});
     save();render();toast('Upcoming test added.');
   });
-  bind('testForm',f=>{
+  bind('testForm',async f=>{
     const p=+f.physics.value||0,c=+f.chemistry.value||0,b=+f.biology.value||0;
     const manualScore=+f.score.value;
     const finalScore=(p||c||b)?(manualScore||p+c+b):manualScore;
-    db.tests.push({id:crypto.randomUUID(),date:today(),name:f.name.value.trim(),score:finalScore,accuracy:+f.accuracy.value||0,physics:p,chemistry:c,biology:b,analysis:f.analysis.value.trim()});
+    let meta=null;
+    const file=f.file&&f.file.files[0];
+    if(file){try{meta=await storeFile(file)}catch(_){toast('File save nahi hui, bina file ke save kar raha hoon.')}}
+    db.tests.push({id:crypto.randomUUID(),date:today(),name:f.name.value.trim(),score:finalScore,accuracy:+f.accuracy.value||0,physics:p,chemistry:c,biology:b,analysis:'',analysisDone:!!(f.analysisDone&&f.analysisDone.checked),...(meta?{fileId:meta.id,fileName:meta.name,fileType:meta.type}:{})});
     save();render();toast('Mock test saved.');
   });
 }
@@ -1898,7 +2077,7 @@ if(importBtnEl&&importFileEl)importBtnEl.onclick=()=>importFileEl.click();
 if(importFileEl)importFileEl.onchange=e=>{const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d||!Array.isArray(d.tasks))throw new Error('bad');if(!confirm('Replace current data with this backup?')){e.target.value='';return}db={...seed(),...d};save();render();toast('Backup imported.')}catch(_){toast('Invalid backup file.')}e.target.value=''};r.readAsText(file)};
 
 document.addEventListener('visibilitychange',async()=>{
-  if(document.hidden)return;
+  if(document.hidden){try{flushMissionSession();saveQuizProgress()}catch(_){}return}
   timerTick();
   checkDueReminders();
   const el=document.getElementById('timerFull');
