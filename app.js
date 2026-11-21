@@ -27,7 +27,7 @@ let activeQuiz=null, activeQuizMeta={subject:'All',chapter:'All'}, quizIdx=0, qu
 let topBannerHidden=false, activeReminderTaskId=null;
 let timerEndAt=0, timerLabel='', wakeLock=null, ongoingNotifLast=0;
 let timerMissionId=null, missionRanSecs=0, runStartedAt=0, missionSessionId=null, lastMissionFlush=0;
-let vaultChapterFilter='All', mistakeOpenGroups=new Set(), activeQuizKey=null, activeQuizArgs=null;
+let vaultChapterFilter='All', mistakeOpenGroups=new Set(), vaultOpenGroups=new Set(), topicOpenGroups=new Set(), activeQuizKey=null, activeQuizArgs=null;
 let mockLabFix=8, mockLabFocusId=null;
 let skipDrill=false, drillNet=0, drillForced=0, drillRight=0, drillWrong=0, drillSkip=0;
 
@@ -1118,6 +1118,54 @@ function getChaptersForSubject(sub){
   return [...new Set([...fromDb,...fromSyl,...fromQuiz])];
 }
 
+function topicKey(sub,ch){return String(sub||'')+'||'+String(ch||'').trim()}
+function getTopics(sub,ch){db.topics=db.topics||{};return db.topics[topicKey(sub,ch)]||[]}
+window.toggleTopicGroup=el=>{const k=el.dataset.key;if(el.open)topicOpenGroups.add(k);else topicOpenGroups.delete(k)};
+window.addPracticeTopic=btn=>{
+  const inp=btn.parentElement.querySelector('input');
+  const name=(inp.value||'').trim();
+  if(!name){toast('Topic ka naam likho.');return}
+  const key=topicKey(btn.dataset.sub,btn.dataset.chap);
+  db.topics=db.topics||{};
+  const list=db.topics[key]=db.topics[key]||[];
+  if(list.some(t=>t.toLowerCase()===name.toLowerCase())){toast('Ye topic pehle se hai.');return}
+  list.push(name);
+  topicOpenGroups.add(key);
+  save();render();toast('Topic add ho gaya.');
+};
+window.deletePracticeTopic=btn=>{
+  const key=topicKey(btn.dataset.sub,btn.dataset.chap);
+  const list=(db.topics||{})[key]||[];
+  const i=parseInt(btn.dataset.i,10);
+  if(!(i>=0&&i<list.length))return;
+  if(!confirm('Ye topic delete karein?'))return;
+  list.splice(i,1);
+  if(!list.length)delete db.topics[key];
+  save();render();
+};
+window.startTopicQuiz=btn=>{
+  const sub=btn.dataset.sub,chap=btn.dataset.chap,top=btn.dataset.topic;
+  const pool=(db.quizzes||[]).filter(q=>String(q.subject||'').trim().toLowerCase()===sub.toLowerCase()&&String(q.chapter||'').trim().toLowerCase()===chap.trim().toLowerCase()&&String(q.topic||'').trim().toLowerCase()===top.trim().toLowerCase());
+  if(!pool.length){toast('Is topic ke MCQs abhi nahi hain (JSON mein "topic" field daalo).');return}
+  beginQuizSession(pool,{subject:sub,chapter:chap+' • '+top});
+};
+function topicsBlockHTML(sub,ch,subBank){
+  const key=topicKey(sub,ch),list=getTopics(sub,ch);
+  return `<details class="group" style="margin:4px 0 10px" data-key="${esc(key)}" ${topicOpenGroups.has(key)?'open':''} ontoggle="toggleTopicGroup(this)">
+    <summary><span>📑 Topics</span><span class="tag ${list.length?'green':''}">${list.length}</span></summary>
+    <div class="group-body" style="padding:8px 12px 10px">
+      ${list.map((t,i)=>{
+        const n=subBank.filter(x=>String(x.chapter||'').trim().toLowerCase()===ch.trim().toLowerCase()&&String(x.topic||'').trim().toLowerCase()===t.toLowerCase()).length;
+        return `<div class="list-item"><span>• ${esc(t)} ${n?`<span class="tag green">${n} Qs</span>`:''}</span><span style="display:flex;gap:6px;align-items:center">${n?`<button type="button" class="btn secondary" style="padding:4px 8px;font-size:10px" data-sub="${esc(sub)}" data-chap="${esc(ch)}" data-topic="${esc(t)}" onclick="startTopicQuiz(this)">Start</button>`:''}<button type="button" class="icon-btn" style="padding:2px 6px" data-sub="${esc(sub)}" data-chap="${esc(ch)}" data-i="${i}" onclick="deletePracticeTopic(this)">×</button></span></div>`;
+      }).join('')||'<div class="muted" style="font-size:11px;padding:6px 0">Abhi koi topic nahi.</div>'}
+      <div class="actions" style="margin-top:8px;gap:6px">
+        <input placeholder="Naya topic (e.g. Meiosis)" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter'){event.preventDefault();this.nextElementSibling.click()}">
+        <button type="button" class="btn" style="padding:5px 10px" data-sub="${esc(sub)}" data-chap="${esc(ch)}" onclick="addPracticeTopic(this)">＋ Add</button>
+      </div>
+    </div>
+  </details>`;
+}
+
 window.setQuestionMark=(markVal)=>{
   const norm=normalizeMark(markVal);
   if(!activeQuiz||!activeQuiz[quizIdx])return;
@@ -1211,6 +1259,7 @@ function parseQuizJsonText(raw){
       opts:item.opts.map(o=>String(o)),
       ans:ansIdx,
       mark:mk,
+      topic:String(item.topic||'').trim(),
       exp:String(item.exp||'').trim()
     });
   }
@@ -1612,7 +1661,7 @@ function practiceView(){
                 return `<div class="list-item">
                   <span><b>${esc(ch)}</b> <span class="tag ${cnt?'green':''}">${cnt} Qs ready</span>${hasPg?` <span class="tag gold">Q${pg.idx+1}/${pg.ids.length} saved</span>`:''}</span>
                   <span style="display:flex;gap:6px;align-items:center">${hasPg?`<button type="button" class="btn ghost" style="padding:5px 9px" title="Reset progress" data-sub="${esc(selectedQuizSubject)}" data-chap="${esc(ch)}" onclick="resetChapterProgress(this)">↺</button>`:''}<button type="button" class="btn ${cnt?'secondary':'ghost'}" style="padding:5px 10px" data-sub="${esc(selectedQuizSubject)}" data-chap="${esc(ch)}" onclick="launchChapterBtn(this)">${hasPg?'▶ Resume':'Start Chapter'}</button></span>
-                </div>`;
+                </div>${topicsBlockHTML(selectedQuizSubject,ch,subBank)}`;
               }).join('')}
             </div>
           </div>`;
@@ -1917,6 +1966,7 @@ window.deleteMistake=async(id)=>{
 
 window.setVaultFilter=f=>{vaultFilter=f;vaultChapterFilter='All';render()};
 window.setVaultChapterFilter=ch=>{vaultChapterFilter=ch;render()};
+window.toggleVaultGroup=el=>{const k=el.dataset.key;if(el.open)vaultOpenGroups.add(k);else vaultOpenGroups.delete(k)};
 function chapterOptionsHTML(sub,selected=''){
   const list=(sub&&sub!=='Formula / Notes')?getChaptersForSubject(sub):[];
   return '<option value="">— General (no chapter) —</option>'+list.map(ch=>`<option value="${esc(ch)}" ${ch===selected?'selected':''}>${esc(ch)}</option>`).join('');
@@ -1977,10 +2027,6 @@ function vault(){
       ${['All','Physics','Chemistry','Biology','Formula / Notes'].map(f=>`<button type="button" class="btn ${vaultFilter===f?'':'secondary'}" style="padding:6px 10px" onclick="setVaultFilter('${f}')">${f}</button>`).join('')}
     </div>
   </div>
-  ${hasChapters?`<div class="chip-wrap">
-    <button type="button" class="btn ${vaultChapterFilter==='All'?'':'secondary'}" style="padding:5px 9px;font-size:10px" data-ch="All" onclick="setVaultChapterFilter(this.dataset.ch)">All chapters</button>
-    ${chapList.map(ch=>`<button type="button" class="btn ${vaultChapterFilter===ch?'':'secondary'}" style="padding:5px 9px;font-size:10px" data-ch="${esc(ch)}" onclick="setVaultChapterFilter(this.dataset.ch)">${esc(ch)}${cnt(ch)?` (${cnt(ch)})`:''}</button>`).join('')}
-  </div>`:''}
   <div class="two-col">
     <div class="card">
       <h3>Upload Study Material</h3>
@@ -1999,7 +2045,7 @@ function vault(){
     </div>
     <div class="card">
       <h3>Saved Files (${items.length})</h3>
-      ${items.length?gl.map(g=>`<div class="vault-group-title">📘 ${vaultFilter==='All'?esc(g.subject)+' • ':''}${esc(g.chapter||'General')} (${g.list.length})</div><div class="vault-grid">${g.list.map(vaultCardHTML).join('')}</div>`).join(''):'<div class="empty">No screenshots or PDFs uploaded yet. Add your first formula sheet or question screenshot.</div>'}
+      ${items.length?`<div class="muted" style="font-size:10px;margin-bottom:10px">${items.length} files • ${gl.length} chapters (chapter pe tap karke files kholo)</div>`+gl.map(g=>{const k=(g.subject||'')+'||'+(g.chapter||'');return `<details class="group" data-key="${esc(k)}" ${vaultOpenGroups.has(k)?'open':''} ontoggle="toggleVaultGroup(this)"><summary><span><b>📘 ${esc(g.chapter||'General')}</b> <span class="muted" style="font-size:10px">${esc(g.subject)}</span></span><span class="tag green">${g.list.length} files</span></summary><div class="group-body" style="padding:12px"><div class="vault-grid">${g.list.map(vaultCardHTML).join('')}</div></div></details>`}).join(''):'<div class="empty">No screenshots or PDFs uploaded yet. Add your first formula sheet or question screenshot.</div>'}
     </div>
   </div>`;
 }
