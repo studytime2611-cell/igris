@@ -1,0 +1,7 @@
+name = "igris-personal-ai"
+main = "worker.js"
+compatibility_date = "2026-11-21"
+
+[vars]
+ALLOWED_ORIGIN = "https://studytime2611-cell.github.io"
+OPENAI_MODEL = "gpt-6.2-sol"
