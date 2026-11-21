@@ -213,3 +213,134 @@ details.group .group-body{padding:0 12px}
 .lab-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 @media(max-width:900px){.lab-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:680px){.lab-grid{grid-template-columns:1fr}}
+
+/* =========================================================
+   IGRIS WHITE EDITION — visual-only theme overrides
+   Keeps the existing layout, selectors and interactions intact.
+   Add igris-samurai.jpg beside this CSS file in your project.
+   ========================================================= */
+:root{
+  color-scheme:light;
+  --bg:#f5f6f8;
+  --panel:#ffffff;
+  --panel2:#f0f1f4;
+  --line:#e2e4e9;
+  --text:#20232b;
+  --muted:#777d89;
+  --red:#c92738;
+  --red2:#9f1f2e;
+  --soft:#f8e9eb;
+  --green:#27865d;
+  --gold:#a87919;
+}
+body{background:var(--bg);color:var(--text)}
+.top-live-banner{background:linear-gradient(90deg,#fff5f6,#f2f3f7);border-bottom:1px solid #ead5d9;color:#282b33}
+.reminder-alert-bar{background:#fff;border-color:#d7b96e;box-shadow:0 12px 32px #20232b18}
+.reminder-chip{background:#fff8e8;color:#896515;border-color:#ead9aa}
+.sidebar{background:#fff;border-right:1px solid var(--line)}
+.brand-mark{background:linear-gradient(145deg,#e34a58,#a51f30);color:#fff}
+.side-label,.eyebrow{color:#858b96}
+.nav{color:#59606d}
+.nav:hover,.nav.active{background:linear-gradient(90deg,#fbeaec,#fff4f5);color:#9f1f2e}
+.nav.active{box-shadow:inset 3px 0 var(--red)}
+.system-status{color:#68717d}
+.pulse{box-shadow:0 0 10px #65c99a55}
+.main{color:var(--text)}
+.topbar{border-bottom-color:var(--line)}
+.date-chip,.icon-btn,.mobile-menu{background:#fff;color:#444b57;border-color:var(--line)}
+.hero{
+  color:#20232b;
+  border:1px solid #e2e4e9;
+  background-color:#fff;
+  background-image:linear-gradient(90deg,rgba(255,255,255,.98) 0%,rgba(255,255,255,.94) 43%,rgba(255,255,255,.48) 72%,rgba(255,255,255,.12) 100%),url('./igris-samurai.jpg');
+  background-repeat:no-repeat;
+  background-position:center,right center;
+  background-size:cover,auto 100%;
+  box-shadow:0 8px 24px #252b3510;
+}
+.hero:after{color:#20232b0a}
+.hero .eyebrow{color:#a42a38}
+.hero p{color:#626976}
+.rank{border-color:#e8cbd0;background:#fff5f6}
+.rank small{color:#a52b3a}
+.rank.upcoming{border-color:#d9dfe8;background:#f3f6fb}
+.rank.upcoming small{color:#647b9e}
+.rank-edit{color:#737b88}
+.stat,.card{background:#fff;border-color:var(--line);box-shadow:0 5px 18px #252b3508}
+.stat-label{color:#7a818d}
+.stat-note{color:#747b87}
+.empty{color:var(--muted)}
+.bar{background:#e9ebef}
+.bar span{background:linear-gradient(90deg,#a92232,#e34a58)}
+.btn{background:var(--red);color:#fff}
+.btn.secondary{background:#f0f1f4;border:1px solid #dfe2e8;color:#343a45}
+.btn.ghost{background:#fff;border-color:var(--line);color:#4d5562}
+.btn.danger{background:#fff0f1;border:1px solid #efc7cd;color:#a52131}
+.field label{color:#737b87}
+input,select,textarea{background:#fff;border-color:#d9dde4;color:#242832}
+input::placeholder,textarea::placeholder{color:#9aa0aa}
+input:focus,select:focus,textarea:focus{border-color:#c94a58;box-shadow:0 0 0 3px #c9273812}
+.task{border-bottom-color:#eceef2}
+.task.done .task-text{color:#8c929c}
+.sub-group-box{border-color:var(--line);background:#fafbfc}
+.sub-group-head{border-bottom-color:#e8eaf0}
+.type-block{background:#fff;border-color:#e4e6eb}
+.type-block-head{color:#515966}
+.list-item{border-bottom-color:#eceef2}
+.tag{background:#fff0f2;color:#a72b3a;border-color:#f0d0d5}
+.tag.green{background:#edf8f2;color:#27734f;border-color:#cce9d9}
+.tag.gold{background:#fff8e9;color:#8b681d;border-color:#f0e0b9}
+.tag.blue{background:#eef4fc;color:#526f9c;border-color:#d6e1f2}
+.tag.purple{background:#f4effb;color:#7457a1;border-color:#e3d8f2}
+.countdown{border-color:#e4cbd0}
+.flip-unit,.timer-flip-unit{background:linear-gradient(180deg,#fff 0%,#f6f7f9 100%);border-color:#e1e4ea;box-shadow:0 5px 14px #252b350c,inset 0 1px 0 #fff}
+.flip-val,.timer-flip-val{color:#20232b}
+.flip-lbl,.timer-flip-lbl{color:#7b828e}
+.timer-colon{color:var(--red)}
+.cd-note{color:#59616e}
+.cd-note b{color:#9a711c}
+.timer-state{color:#a52b3a}
+.timer-full{background:#f8f9fb;color:#20232b}
+.tf-time{color:#20232b;text-shadow:0 0 32px #c9273818}
+.tf-state{color:#a52b3a}
+.tf-label{color:#94701e}
+.modal-overlay{background:rgba(31,35,44,.48)}
+.modal-card{background:#fff;border-color:var(--line);box-shadow:0 20px 60px #20232b20}
+.opt-btn{background:#fff;border-color:#dfe2e8;color:#343a45}
+.opt-btn:hover:not(:disabled){border-color:#d99aa2;background:#fff7f8}
+.ai-reply-box,.prompt-preview{background:#f7f8fa;border-color:#e1e4ea;color:#343a45}
+.vault-card{background:#fff;border-color:var(--line)}
+.vault-thumb{background:#f5f6f8;border-color:#d9dde4}
+.pdf-badge{color:#a52b3a}
+th,td{border-bottom-color:#e8eaf0}
+th{color:#747b87}
+.toast{background:#fff;border-color:#e4c4c9;color:#343a45;box-shadow:0 8px 24px #20232b18}
+footer{color:#858b96}
+footer span{color:var(--red)}
+.tab{background:#fff;border-color:var(--line);color:#646c78}
+.tab.active{background:#fff0f2;border-color:#e8c4ca;color:#a32131}
+.tab.active b{color:#a32131}
+.cv{fill:#525a66}
+.cl{fill:#7c8490}
+.track-wrap{background:#fff;border-color:var(--line)}
+.track th{border-bottom-color:var(--line);color:#737b87}
+.track th small{color:#59616e}
+.track td{border-bottom-color:#eceef2}
+.track th:first-child,.track td:first-child{background:#fff;border-right-color:var(--line)}
+.str-Weak{background:#fff0f1;border-color:#e6aeb6;color:#a52131}
+.str-Medium{background:#fff8e9;border-color:#ead7a9;color:#8b681d}
+.str-Strong{background:#edf8f2;border-color:#bfe2cf;color:#246b4b}
+.cell{border-color:#d9dde4;background:#fff}
+.cell.on{background:linear-gradient(145deg,#d83c4c,#a51f30);border-color:#c92738;color:#fff}
+.cell.rev.on{background:linear-gradient(145deg,#2d986b,#1d6748);border-color:#27865d}
+.cdate{color:#27865d}
+.vault-group-title{color:#8b681d}
+details.group{border-color:#e2e4e9;background:#fff}
+details.group>summary{color:#303641}
+details.group[open]>summary{border-bottom-color:#e8eaf0}
+.lab-range{accent-color:var(--red)}
+
+@media(max-width:680px){
+  .sidebar{background:#fff;box-shadow:15px 0 40px #20232b18}
+  .hero{background-position:center,right center;background-size:cover,auto 100%}
+}
