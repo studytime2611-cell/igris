@@ -7,8 +7,11 @@ const addDays=(isoDate,days)=>{
   const dt=new Date(y,(m||1)-1,(d||1)+days,12,0,0);
   return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
 };
+const isDaily=t=>!t.stage||t.stage==='today';
+const daysBetween=(a,b)=>{const p=x=>{const [y,m,d]=String(x).split('-').map(Number);return Date.UTC(y,(m||1)-1,d||1)};return Math.round((p(b)-p(a))/86400000)};
 const seed=()=>({
   tasks:[],
+  streakDays:{},
   chapters:{Physics:[],Chemistry:[],Biology:[]},
   sessions:[],
   mistakes:[],
@@ -193,7 +196,7 @@ function checkDueReminders(){
   const now=Date.now();
   let changed=false;
   for(const t of db.tasks){
-    if(t.done || !t.reminderAt || t.reminded)continue;
+    if(t.done || !isDaily(t) || !t.reminderAt || t.reminded)continue;
     const dueMs=new Date(t.reminderAt).getTime();
     if(!Number.isNaN(dueMs) && dueMs<=now){
       t.reminded=true;
@@ -444,7 +447,7 @@ function navigate(v){
 function title(s){document.getElementById('viewTitle').textContent=s}
 function stat(label,value,note){return `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${value}</div><div class="stat-note">${note}</div></div>`}
 function progress(label,done,total){let p=total?Math.round(done/total*100):0;return `<div class="progress-row"><div class="progress-meta"><span>${label}</span><span>${p}%</span></div><div class="bar"><span style="width:${p}%"></span></div></div>`}
-function todayTasks(){return db.tasks.filter(t=>t.date===today())}
+function todayTasks(){return db.tasks.filter(t=>isDaily(t)&&t.date===today())}
 function totalMinutes(){return db.sessions.filter(s=>s.date===today()).reduce((a,s)=>a+s.minutes,0)}
 function totalQuestionsToday(){return db.sessions.filter(s=>s.date===today()).reduce((a,s)=>a+(s.questions||0),0)}
 function examDate(){return db.settings.examDate||'2027-05-02'}
@@ -572,7 +575,7 @@ function dashboard(){
     <div>
       <div class="section-head"><h2>Today's Missions</h2><small>${dateText()}</small></div>
       <div class="card">
-        ${tasks.length?tasks.map(taskHTML).join(''):'<div class="empty">No missions added yet. Create your first daily target.</div>'}
+        ${tasks.length?tasks.map(t=>taskHTML(t)).join(''):'<div class="empty">No missions added yet. Create your first daily target.</div>'}
         <div class="actions" style="margin-top:12px"><button class="btn" onclick="navigate('missions')">Manage missions</button></div>
       </div>
       <div class="section-head"><h2>Focus — last 7 days</h2><small>MINUTES</small></div>
@@ -637,13 +640,27 @@ window.startMissionFocus=(id)=>{
 };
 
 function taskHTML(t){
-  const carried=!t.done&&t.date<today();
+  const stage=t.stage||'today';
   const mType=normalizeMissionType(t);
+  const tag=`<span class="${missionTypeTagClass(mType)}">${esc(mType)}</span>`;
+  const sub=`<small>${esc(t.subject||'GENERAL')}</small>`;
+  const del=`<button type="button" class="icon-btn" style="padding:2px 6px" onclick="deleteTask('${t.id}')">×</button>`;
+  if(t.done){
+    return `<label class="task done"><input type="checkbox" checked onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span>${tag}<span class="tag green">✅ ${esc(shortDate(t.doneAt||t.date))}</span>${sub}${del}</label>`;
+  }
+  if(stage==='open'){
+    return `<div class="task"><span class="task-text">${esc(t.text)}</span>${tag}${sub}<button type="button" class="btn mini" title="Closed list me daalo" onclick="moveTask('${t.id}','closed')">＋</button>${del}</div>`;
+  }
+  if(stage==='closed'){
+    return `<div class="task"><span class="task-text">${esc(t.text)}</span>${tag}${sub}<button type="button" class="btn secondary mini" title="Open list me wapas" onclick="moveTask('${t.id}','open')">↩</button><button type="button" class="btn mini" title="Aaj ke daily mission me daalo" onclick="moveTask('${t.id}','today')">＋</button>${del}</div>`;
+  }
+  const carried=t.date<today();
   const old=carried?`<span class="tag gold">Carried over • ${dateText(t.date)}</span>`:'';
-  const rem=!t.done&&t.reminderAt?`<span class="reminder-chip">⏰ ${esc(formatReminderLabel(t.reminderAt))}${t.reminded?' • Sent':''}</span>`:'';
-  const remActions=!t.done&&t.reminderAt?`<button type="button" class="icon-btn" style="padding:2px 6px;font-size:10px" title="Snooze 10m" onclick="snoozeTaskReminder('${t.id}',10)">+10m</button><button type="button" class="icon-btn" style="padding:2px 6px;font-size:10px" title="Clear reminder" onclick="clearTaskReminder('${t.id}')">🔕</button>`:'';
-  const fBtn=!t.done&&t.focusMins?`<button type="button" class="btn secondary" style="padding:2px 7px;font-size:10px" onclick="startMissionFocus('${t.id}')">▶ ${t.focusMins}m</button>`:'';
-  return `<label class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span><span class="${missionTypeTagClass(mType)}">${esc(mType)}</span>${old}${rem}${remActions}${fBtn}<small>${esc(t.subject||'GENERAL')}</small><button type="button" class="icon-btn" style="padding:2px 6px" onclick="deleteTask('${t.id}')">×</button></label>`;
+  const rem=t.reminderAt?`<span class="reminder-chip">⏰ ${esc(formatReminderLabel(t.reminderAt))}${t.reminded?' • Sent':''}</span>`:'';
+  const remActions=t.reminderAt?`<button type="button" class="icon-btn" style="padding:2px 6px;font-size:10px" title="Snooze 10m" onclick="snoozeTaskReminder('${t.id}',10)">+10m</button><button type="button" class="icon-btn" style="padding:2px 6px;font-size:10px" title="Clear reminder" onclick="clearTaskReminder('${t.id}')">🔕</button>`:'';
+  const fBtn=t.focusMins?`<button type="button" class="btn secondary" style="padding:2px 7px;font-size:10px" onclick="startMissionFocus('${t.id}')">▶ ${t.focusMins}m</button>`:'';
+  const back=`<button type="button" class="icon-btn" style="padding:2px 6px;font-size:10px" title="Closed list me wapas" onclick="moveTask('${t.id}','closed')">↩</button>`;
+  return `<label class="task"><input type="checkbox" onchange="toggleTask('${t.id}',this.checked)"><span class="task-text">${esc(t.text)}</span>${tag}${old}${rem}${remActions}${fBtn}${sub}${back}${del}</label>`;
 }
 
 function groupedMissionsHTML(list,emptyMsg){
@@ -663,7 +680,7 @@ function groupedMissionsHTML(list,emptyMsg){
           const items=subItems.filter(t=>normalizeMissionType(t)===mType);
           return `<div class="type-block">
             <div class="type-block-head"><span>${mType}</span><span>${items.length}</span></div>
-            ${items.length?items.map(taskHTML).join(''):`<div class="muted" style="font-size:10px;padding:6px 0">No ${mType.toLowerCase()}</div>`}
+            ${items.length?items.map(t=>taskHTML(t)).join(''):`<div class="muted" style="font-size:10px;padding:6px 0">No ${mType.toLowerCase()}</div>`}
           </div>`;
         }).join('')}
       </div>
@@ -681,7 +698,7 @@ function groupedMissionsHTML(list,emptyMsg){
         const items=otherItems.filter(t=>normalizeMissionType(t)===mType);
         return `<div class="type-block">
           <div class="type-block-head"><span>${mType}</span><span>${items.length}</span></div>
-          ${items.length?items.map(taskHTML).join(''):`<div class="muted" style="font-size:10px;padding:6px 0">No ${mType.toLowerCase()}</div>`}
+          ${items.length?items.map(t=>taskHTML(t)).join(''):`<div class="muted" style="font-size:10px;padding:6px 0">No ${mType.toLowerCase()}</div>`}
         </div>`;
       }).join('')}
     </div>
@@ -722,14 +739,42 @@ window.onMissionDescInput=el=>{
   }
 };
 
+function missionTabsHTML(counts){
+  const tabs=[['open','Open'],['closed','Closed'],['today','Today'],['done','Done']];
+  return `<div class="tabs four">${tabs.map(([k,l])=>`<button type="button" class="tab ${missionTab===k?'active':''}" onclick="setMissionTab('${k}')">${l} <b>${counts[k]}</b></button>`).join('')}</div>`;
+}
+
 function missions(){
   title('Daily Missions');
-  const open=db.tasks.filter(t=>!t.done).sort((a,b)=>a.date.localeCompare(b.date)),closed=db.tasks.filter(t=>t.done).sort((a,b)=>(b.doneAt||b.date).localeCompare(a.doneAt||a.date)),tt=todayTasks(),td=tt.filter(t=>t.done).length,list=missionTab==='open'?open:closed;
-  const empty=missionTab==='open'?'No open missions. Add a task to begin.':'No closed missions yet. Complete one to see it here.';
+  const tdy=today();
+  const lists={
+    open:db.tasks.filter(t=>t.stage==='open'&&!t.done),
+    closed:db.tasks.filter(t=>t.stage==='closed'&&!t.done),
+    today:db.tasks.filter(t=>isDaily(t)&&(!t.done||(t.doneAt||t.date)===tdy)).sort((a,b)=>a.date.localeCompare(b.date)),
+    done:db.tasks.filter(t=>t.done).sort((a,b)=>(b.doneAt||b.date).localeCompare(a.doneAt||a.date))
+  };
+  if(!['open','closed','today','done'].includes(missionTab))missionTab='open';
+  const counts={open:lists.open.length,closed:lists.closed.length,today:lists.today.filter(t=>!t.done).length,done:lists.done.length};
+  const tt=todayTasks(),td=tt.filter(t=>t.done).length,list=lists[missionTab];
+  const heads={open:'Open — 3-week target',closed:'Closed — queue',today:'Today — daily missions',done:'Done'};
+  const hints={
+    open:'Poore 3-week ka target yaha likho. Jo target pakadna hai uske aage ＋ dabao → Closed list me chala jayega.',
+    closed:'Ye selected targets hain. ＋ dabao → aaj ke daily mission (Today) me add ho jayega. ↩ se Open me wapas.',
+    today:'Aaj ke missions. ✅ tick karo → Done list me date ke saath chala jayega.',
+    done:'Complete hue missions, date ke saath. Untick karoge to wapas Today me aa jayega.'
+  };
+  const empty={
+    open:'Open list khali hai. Right side se apna 3-week target add karo.',
+    closed:'Closed list khali hai. Open list ke ＋ se target yaha lao.',
+    today:'Aaj ka koi mission nahi. Closed list ke ＋ se add karo (streak ke liye zaruri hai 🔥).',
+    done:'Abhi koi done mission nahi. Today me ✅ tick karo.'
+  }[missionTab];
   const notifyStatus=('Notification' in window)?Notification.permission:'unsupported';
+  const addTo=missionTab==='done'?'open':missionTab;
+  const opt=(v,l)=>`<option value="${v}" ${addTo===v?'selected':''}>${l}</option>`;
   return `<div class="section-head"><h2>Mission Board</h2><small>${dateText()} • ${td}/${tt.length} TODAY</small></div>
   <div class="two-col">
-    <div class="card"><h3>Your missions (${missionTab==='open'?'Open':'Closed'})</h3>${tabsHTML(missionTab,open.length,closed.length,'setMissionTab')}${groupedMissionsHTML(list,empty)}<div style="margin-top:12px">${progress('TODAY’S COMPLETION',td,tt.length)}</div></div>
+    <div class="card"><h3>${heads[missionTab]}</h3>${missionTabsHTML(counts)}<p class="muted" style="font-size:10px;line-height:1.6;margin:0 0 10px">${hints[missionTab]}</p>${groupedMissionsHTML(list,empty)}<div style="margin-top:12px">${progress('TODAY’S COMPLETION',td,tt.length)}</div></div>
     <div class="card"><h3>Deploy a new mission</h3>
       <form id="taskForm">
         <div class="field"><label>TASK DESCRIPTION</label><input name="text" placeholder="e.g. Redox rxn lec -02 / 30 MCQs" oninput="onMissionDescInput(this)" required></div>
@@ -741,6 +786,7 @@ function missions(){
           <div class="field"><label>FOCUS DURATION (MINS)</label><input name="focusMins" type="number" min="1" max="720" placeholder="e.g. 45"></div>
           <div class="field"><label>REMINDER TIME (OPTIONAL)</label><input type="datetime-local" name="reminderAt"></div>
         </div>
+        <div class="field"><label>ADD TO</label><select name="stage">${opt('open','Open list (3-week target)')}${opt('closed','Closed list (queue)')}${opt('today','Today (daily mission)')}</select></div>
         <div class="actions" style="margin-top:4px">
           <button type="submit" class="btn">＋ Add mission</button>
           <button type="button" class="btn secondary" onclick="requestBrowserNotifyPermission()">🔔 Top Alert (${esc(notifyStatus)})</button>
@@ -749,7 +795,7 @@ function missions(){
       <div class="actions" style="margin-top:12px">
         <button type="button" class="btn secondary" onclick="generateWeakMissions()">⚔ Weak chapters → missions</button>
       </div>
-      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Open aur Closed dono lists Physics, Chemistry aur Biology mein banti hain — har subject ke andar Practice, Revision aur Lecture ke alag blocks hain. Weak-auto missions Subject HQ ke soft chapters se aate hain.</p>
+      <p class="muted" style="font-size:10px;line-height:1.6;margin-top:16px">Flow: Open (3-week target) ＋→ Closed ＋→ Today ✅→ Done. Har list Physics, Chemistry, Biology me banti hai — subject ke andar Practice, Revision, Lecture blocks. Weak-auto missions seedhe Today me aate hain.</p>
     </div>
   </div>`;
 }
@@ -760,13 +806,14 @@ window.generateWeakMissions=()=>{
   let n=0;
   for(const w of weak){
     const text=`${w.name}: 20 MCQ + short revision`;
-    const exists=db.tasks.some(t=>!t.done&&t.date===today()&&String(t.text||'').includes(w.name));
+    const exists=db.tasks.some(t=>!t.done&&isDaily(t)&&t.date===today()&&String(t.text||'').includes(w.name));
     if(exists)continue;
     db.tasks.push({
       id:crypto.randomUUID(),
       date:today(),
       text,
       subject:w.sub||'General',
+      stage:'today',
       missionType:'Practice',
       done:false,
       focusMins:45,
@@ -775,7 +822,7 @@ window.generateWeakMissions=()=>{
     n++;
   }
   save();
-  missionTab='open';
+  missionTab='today';
   render();
   toast(n?`${n} weak-chapter mission(s) added for today.`:'Already queued for today.');
   if(n)navigate('missions');
@@ -891,7 +938,7 @@ window.missionRowAction=id=>{
   startTimer();
 };
 function missionFocusRowsHTML(){
-  const list=db.tasks.filter(t=>t.focusMins>0&&(!t.done||t.date===today())).sort((a,b)=>(a.done?1:0)-(b.done?1:0)||String(a.date).localeCompare(String(b.date)));
+  const list=db.tasks.filter(t=>isDaily(t)&&t.focusMins>0&&(!t.done||t.date===today())).sort((a,b)=>(a.done?1:0)-(b.done?1:0)||String(a.date).localeCompare(String(b.date)));
   if(!list.length)return '<div class="empty">Koi mission focus time ke saath nahi hai. Daily Missions me mission add karte waqt focus minutes daalo.</div>';
   return list.map(t=>{
     const used=db.sessions.filter(x=>x.date===today()&&x.missionId===t.id).reduce((a,x)=>a+x.minutes,0);
@@ -2050,6 +2097,8 @@ function vault(){
   </div>`;
 }
 
+const REV_STEPS=[['r3','+3d',3],['r7','+7d',7],['r21','+21d',21]];
+
 function revisionScheduleDates(r){
   const base=r.date||today();
   const d3=r.r3||addDays(base,3);
@@ -2058,48 +2107,95 @@ function revisionScheduleDates(r){
   return {d3,d7,d21};
 }
 
-function dueRevisionsList(){
+/** First milestone (+3 → +7 → +21) not yet marked done, with its due date and status. */
+function revisionPending(r){
+  const dates=revisionScheduleDates(r);
+  const ms=r.milestones||{};
   const t=today();
+  for(const [key,label,gap] of REV_STEPS){
+    if(!ms[key]){
+      const date=dates['d'+gap];
+      return {key,label,gap,date,state:date<t?'red':date===t?'today':'upcoming',late:Math.max(0,daysBetween(date,t))};
+    }
+  }
+  return null;
+}
+
+/** Entries whose current milestone is due today or overdue (red zone). Red zone first, oldest first. */
+function dueRevisionsList(){
   return db.revisions
-    .map(r=>{
-      const {d3,d7,d21}=revisionScheduleDates(r);
-      const ms=r.milestones||{};
-      const dueDates=[];
-      if(d3<=t&&!ms.r3)dueDates.push({key:'r3',date:d3,label:'+3d'});
-      if(d7<=t&&!ms.r7)dueDates.push({key:'r7',date:d7,label:'+7d'});
-      if(d21<=t&&!ms.r21)dueDates.push({key:'r21',date:d21,label:'+21d'});
-      return {...r,d3,d7,d21,dueDates};
-    })
-    .filter(r=>r.dueDates.length>0)
-    .sort((a,b)=>a.dueDates[0].date.localeCompare(b.dueDates[0].date));
+    .map(r=>({...r,pending:revisionPending(r)}))
+    .filter(r=>r.pending&&(r.pending.state==='red'||r.pending.state==='today'))
+    .map(r=>({...r,dueDates:[{key:r.pending.key,date:r.pending.date,label:r.pending.label}]}))
+    .sort((a,b)=>a.pending.date.localeCompare(b.pending.date));
 }
 
 window.markRevisionDone=id=>{
   const r=db.revisions.find(x=>x.id===id);
   if(!r)return;
+  const p=revisionPending(r);
+  if(!p){toast('Is chapter ke teeno revisions complete hain 🎉');return}
   const t=today();
-  const {d3,d7,d21}=revisionScheduleDates(r);
+  if(p.date>t){toast(`Ye revision ${shortDate(p.date)} ko due hai.`);return}
   r.milestones=r.milestones||{};
-  if(d3<=t&&!r.milestones.r3)r.milestones.r3=t;
-  else if(d7<=t&&!r.milestones.r7)r.milestones.r7=t;
-  else if(d21<=t&&!r.milestones.r21)r.milestones.r21=t;
-  else{toast('No pending milestone for this entry.');return}
+  r.milestones[p.key]=t;
   r.lastRevised=t;
+  let msg='Revision done ✅';
+  if(p.state==='red'){
+    // late: aage ki dates us din se re-base (3-7-21 rule done-date se)
+    const moved=[];
+    for(const [key,label,gap] of REV_STEPS){
+      if(r.milestones[key])continue;
+      r[key]=addDays(t,gap);
+      moved.push(`${label} → ${shortDate(r[key])}`);
+    }
+    r.rebasedOn=t;
+    msg=moved.length?`Red zone se bahar ✅ — aage ki dates aaj se: ${moved.join(', ')}`:'Red zone se bahar ✅ — revision cycle complete 🎉';
+  }else{
+    const n=revisionPending(r);
+    msg=n?`Done ✅ — next ${n.label}: ${shortDate(n.date)}`:'Done ✅ — revision cycle complete 🎉';
+  }
   save();
   render();
-  toast('Revision milestone marked. Next spaced due will show when ready.');
+  toast(msg);
 };
+
+function revChipsHTML(r){
+  const dates=revisionScheduleDates(r);
+  const ms=r.milestones||{};
+  const p=revisionPending(r);
+  return REV_STEPS.map(([key,label,gap])=>{
+    const d=dates['d'+gap];
+    if(ms[key])return `<span class="tag green">${label} ✓ ${shortDate(ms[key])}</span>`;
+    if(p&&p.key===key&&p.state==='red')return `<span class="tag red">${label} ☠ ${shortDate(d)}</span>`;
+    if(p&&p.key===key&&p.state==='today')return `<span class="tag gold">${label} • aaj</span>`;
+    return `<span class="tag">${label} • ${shortDate(d)}</span>`;
+  }).join(' ');
+}
+
+function revDueRowHTML(r,red){
+  const p=r.pending;
+  const status=red?`${p.label} • due ${shortDate(p.date)} • <b style="color:#fca5a5">${p.late} din late ☠️</b>`:`${p.label} • due aaj`;
+  return `<div class="list-item" style="align-items:flex-start"><div><b>${esc(r.chapter)}</b> <span class="tag blue">${esc(r.subject)}</span><div class="muted" style="margin-top:3px">Logged ${shortDate(r.date)} • ${status}</div></div><button type="button" class="btn" style="padding:6px 10px;white-space:nowrap" onclick="markRevisionDone('${r.id}')">✅ Done</button></div>`;
+}
 
 function revision(){
   title('Revision Log');
   const dueList=dueRevisionsList();
+  const red=dueList.filter(r=>r.pending.state==='red');
+  const dueToday=dueList.filter(r=>r.pending.state==='today');
+  const hist=allRevs();
   return `<div class="section-head"><h2>Revision Tracker</h2><small>SPACED REVISION RECORD (+3 / +7 / +21 DAYS)</small></div>
-  ${dueList.length?`<div class="card" style="margin-bottom:14px;border-color:#a36d10">
-    <div class="section-head" style="margin-top:0"><h3>Due for Revision (${dueList.length})</h3><span class="tag gold">SPACED DUE</span></div>
-    <p class="muted" style="font-size:11px;margin-bottom:8px">Daily alert bhi aayega jab spaced revision due ho. Tap “Mark revised” after you finish that slot.</p>
-    ${dueList.map(r=>`<div class="list-item" style="align-items:flex-start"><div><b>${esc(r.chapter)}</b> <span class="tag blue">${esc(r.subject)}</span><div class="muted" style="margin-top:3px">Logged ${shortDate(r.date)} • Pending: ${r.dueDates.map(d=>d.label+' ('+shortDate(d.date)+')').join(', ')}</div></div><button type="button" class="btn" style="padding:6px 10px" onclick="markRevisionDone('${r.id}')">✓ Mark revised</button></div>`).join('')}
-  </div>`:''}
-  <div class="two-col"><div class="card"><h3>Log a revision session</h3><form id="revisionForm"><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="e.g. Human Reproduction"></div><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div><div class="field"><label>REVISION TYPE</label><select name="kind"><option>Short notes</option><option>NCERT</option><option>Active recall</option><option>Questions / PYQs</option><option>Full chapter</option></select></div></div><button class="btn">Save revision</button></form></div><div class="card"><h3>Revision history</h3>${allRevs().length?allRevs().slice(0,60).map(r=>{const {d3,d7,d21}=revisionScheduleDates(r);const ms=(db.revisions.find(x=>x.chapter===r.chapter&&x.date===r.date)||{}).milestones||{};const isDue=((d3<=today()&&!ms.r3)||(d7<=today()&&!ms.r7)||(d21<=today()&&!ms.r21));return `<div class="list-item"><div><b>${esc(r.chapter)}</b> ${isDue?'<span class="tag gold">DUE</span>':''}<div class="muted">${esc(r.subject)} • ${esc(r.kind)} • Next: +3d (${shortDate(d3)}${ms.r3?' ✓':''}), +7d (${shortDate(d7)}${ms.r7?' ✓':''}), +21d (${shortDate(d21)}${ms.r21?' ✓':''})</div></div><span>${shortDate(r.date)}</span></div>`}).join(''):'<div class="empty">Your revision history will appear here.</div>'}</div></div></div>`;
+  <div class="card red-zone" style="margin-bottom:14px">
+    <div class="section-head" style="margin-top:0"><h3>🟥 Red Zone ☠️ (${red.length})</h3><span class="tag red">MISSED</span></div>
+    <p class="muted" style="font-size:11px;margin-bottom:8px">Due date tak revision complete nahi hua to yaha aata hai. ✅ Done karte hi aage ki dates (+7 / +21) us din se re-set ho jati hain.</p>
+    ${red.length?red.map(r=>revDueRowHTML(r,true)).join(''):'<div class="empty">Red zone clear hai 💪</div>'}
+  </div>
+  <div class="card" style="margin-bottom:14px">
+    <div class="section-head" style="margin-top:0"><h3>Due Today (${dueToday.length})</h3><span class="tag gold">SPACED DUE</span></div>
+    ${dueToday.length?dueToday.map(r=>revDueRowHTML(r,false)).join(''):'<div class="empty">Aaj koi revision due nahi.</div>'}
+  </div>
+  <div class="two-col"><div class="card"><h3>Log a revision session</h3><form id="revisionForm"><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="e.g. Human Reproduction"></div><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div><div class="field"><label>REVISION TYPE</label><select name="kind"><option>Short notes</option><option>NCERT</option><option>Active recall</option><option>Questions / PYQs</option><option>Full chapter</option></select></div></div><button class="btn">Save revision</button></form></div><div class="card"><h3>Revision history</h3>${hist.length?hist.slice(0,60).map(r=>{const rec=db.revisions.find(x=>x.chapter===r.chapter&&x.date===r.date);const p=rec?revisionPending(rec):null;const isRed=p&&p.state==='red';return `<div class="list-item" style="align-items:flex-start"><div><b>${esc(r.chapter)}</b> ${isRed?'<span class="tag red">RED ZONE ☠️</span>':''}<div class="muted" style="margin:3px 0 5px">${esc(r.subject)} • ${esc(r.kind)}</div>${rec?revChipsHTML(rec):''}</div><span>${shortDate(r.date)}</span></div>`}).join(''):'<div class="empty">Your revision history will appear here.</div>'}</div></div>`;
 }
 
 window.autoCalcMockScore=()=>{
@@ -2183,22 +2279,32 @@ function dayFocusMins(dateKey){
   return db.sessions.filter(x=>x.date===dateKey).reduce((a,x)=>a+(x.minutes||0),0);
 }
 function dayTasksProgress(dateKey){
-  const dayTasks=db.tasks.filter(t=>t.date===dateKey);
+  const dayTasks=db.tasks.filter(t=>isDaily(t)&&t.date===dateKey);
   if(!dayTasks.length)return{total:0,done:0,pct:0};
   const done=dayTasks.filter(t=>t.done).length;
   return{total:dayTasks.length,done,pct:done/dayTasks.length};
 }
 /** A day counts toward streak if focus ≥ 6h (360 min) OR ≥60% of that day's missions are done. */
-function dayQualifies(dateKey){
+function dayQualifiesLive(dateKey){
   if(dayFocusMins(dateKey)>=360)return true;
   const p=dayTasksProgress(dateKey);
   return p.total>0 && p.pct>=0.6;
 }
+/** Once a day qualifies it stays locked in (db.streakDays) — adding/deleting missions later can't undo it.
+ *  If today has no target / hasn't qualified yet, the streak shows up to yesterday (no reset to 0). */
 function streak(){
+  db.streakDays=db.streakDays||{};
+  let changed=false;
+  const q=k=>{
+    if(db.streakDays[k])return true;
+    if(dayQualifiesLive(k)){db.streakDays[k]=true;changed=true;return true}
+    return false;
+  };
   let d=new Date(),c=0;
   const key=()=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-  if(!dayQualifies(key()))d.setDate(d.getDate()-1);
-  while(dayQualifies(key())){c++;d.setDate(d.getDate()-1)}
+  if(!q(key()))d.setDate(d.getDate()-1);
+  while(q(key())){c++;d.setDate(d.getDate()-1)}
+  if(changed)save();
   return c;
 }
 function streakLabel(){
@@ -2403,10 +2509,12 @@ function bindForms(){
     if(remVal&&('Notification' in window)&&Notification.permission==='default')requestBrowserNotifyPermission(false);
     const fMins=parseInt(f.focusMins?.value,10);
     const mType=f.missionType?.value||suggestMissionType(f.text.value)||'Practice';
-    const taskDate=remVal&&/^\d{4}-\d{2}-\d{2}/.test(remVal)?remVal.slice(0,10):today();
+    const stage=f.stage?.value||'today';
+    const taskDate=stage==='today'&&remVal&&/^\d{4}-\d{2}-\d{2}/.test(remVal)?remVal.slice(0,10):today();
     db.tasks.push({
       id:crypto.randomUUID(),
       date:taskDate,
+      stage,
       text:f.text.value.trim(),
       subject:f.subject.value,
       missionType:mType,
@@ -2420,9 +2528,11 @@ function bindForms(){
       timerSeconds=fMins*60;
     }
     save();
+    missionTab=stage;
     checkDueReminders();
     render();
-    toast(fMins>0?`Mission (${mType}) & ${fMins}m focus saved.`:`Mission (${mType}) added.`);
+    const where={open:'Open list',closed:'Closed list',today:'Today'}[stage];
+    toast(fMins>0?`Mission (${mType}) & ${fMins}m focus saved → ${where}.`:`Mission (${mType}) added → ${where}.`);
   });
   bind('sessionForm',f=>{
     const mins=parseInt(f.minutes.value,10);
@@ -2491,7 +2601,22 @@ function bindForms(){
   });
 }
 
-window.toggleTask=(id,v)=>{let t=db.tasks.find(x=>x.id===id);if(t){t.done=v;t.doneAt=v?today():null}save();render()};
+window.toggleTask=(id,v)=>{
+  const t=db.tasks.find(x=>x.id===id);
+  if(t){
+    t.done=v;t.doneAt=v?today():null;
+    if(!t.stage)t.stage='today';
+  }
+  save();render();
+  if(t&&v)toast('Done ✅ — Done list me date ke saath add ho gaya.');
+};
+window.moveTask=(id,stage)=>{
+  const t=db.tasks.find(x=>x.id===id);if(!t)return;
+  t.stage=stage;
+  if(stage==='today'){t.date=today();t.done=false;t.doneAt=null}
+  save();render();
+  toast(stage==='closed'?'Closed list me add 🎯':stage==='today'?'Aaj ke daily mission me add ✅':'Open list me wapas.');
+};
 window.setMissionTab=t=>{missionTab=t;render()};
 window.setMistakeTab=t=>{mistakeTab=t;render()};
 window.toggleMistake=id=>{let m=db.mistakes.find(x=>x.id===id);if(m){m.closed=!m.closed;m.closedAt=m.closed?today():null}save();render();toast(m&&m.closed?'Mistake closed.':'Mistake reopened.')};

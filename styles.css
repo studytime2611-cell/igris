@@ -94,6 +94,10 @@ textarea{min-height:75px;resize:vertical}
 .tag.gold{background:#292316;color:#e7c477}
 .tag.blue{background:#152238;color:#93c5fd}
 .tag.purple{background:#241838;color:#c4b5fd}
+.tag.red{background:#3a1218;color:#fca5a5;border-color:#7f1d2a}
+.btn.mini{padding:3px 9px;font-size:12px;line-height:1.2}
+.tabs.four{gap:6px}.tabs.four .tab{padding:9px 4px;font-size:11px}.tabs.four .tab b{margin-left:4px}
+.card.red-zone{border-color:#7f1d2a;background:linear-gradient(180deg,#1d0c10,var(--panel))}
 
 .countdown{display:flex;gap:20px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:17px 0;border-color:#51212b}
 .flip-group,.timer-flip-wrap{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
@@ -292,6 +296,8 @@ input:focus,select:focus,textarea:focus{border-color:#c94a58;box-shadow:0 0 0 3p
 .tag.gold{background:#fff8e9;color:#8b681d;border-color:#f0e0b9}
 .tag.blue{background:#eef4fc;color:#526f9c;border-color:#d6e1f2}
 .tag.purple{background:#f4effb;color:#7457a1;border-color:#e3d8f2}
+.tag.red{background:#fff0f1;color:#b42335;border-color:#efc7cd}
+.card.red-zone{border-color:#efc7cd;background:linear-gradient(180deg,#fff5f6,#fff)}
 .countdown{border-color:#e4cbd0}
 .flip-unit,.timer-flip-unit{background:linear-gradient(180deg,#fff 0%,#f6f7f9 100%);border-color:#e1e4ea;box-shadow:0 5px 14px #252b350c,inset 0 1px 0 #fff}
 .flip-val,.timer-flip-val{color:#20232b}
