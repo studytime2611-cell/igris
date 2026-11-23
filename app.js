@@ -24,7 +24,7 @@ const seed=()=>({
   settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true}
 });
 
-let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All', selectedQuizSubject=null;
+let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All', selectedQuizSubject=null, analysisTab='Physics';
 let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null, quizClockInterval=null, reminderInterval=null;
 let activeQuiz=null, activeQuizMeta={subject:'All',chapter:'All'}, quizIdx=0, quizScore=0, quizAnswered=false, quizPickedIdx=null, quizWrongList=[], quizElapsedSec=0, retestIdx=0, aiOutput='';
 let topBannerHidden=false, activeReminderTaskId=null;
@@ -1202,7 +1202,10 @@ window.deletePracticeTopic=btn=>{
 window.startTopicQuiz=btn=>{
   const sub=btn.dataset.sub,chap=btn.dataset.chap,top=btn.dataset.topic;
   const pool=(db.quizzes||[]).filter(q=>String(q.subject||'').trim().toLowerCase()===sub.toLowerCase()&&String(q.chapter||'').trim().toLowerCase()===chap.trim().toLowerCase()&&String(q.topic||'').trim().toLowerCase()===top.trim().toLowerCase());
-  if(!pool.length){toast('Is topic ke MCQs abhi nahi hain (JSON mein "topic" field daalo).');return}
+  if(!pool.length){
+    toast('Is topic ke MCQs nahi hain. Bulk JSON mein "topic":"'+top+'" field daalo, phir Start chalega.');
+    return;
+  }
   beginQuizSession(pool,{subject:sub,chapter:chap+' • '+top});
 };
 function topicsBlockHTML(sub,ch,subBank){
@@ -1212,12 +1215,19 @@ function topicsBlockHTML(sub,ch,subBank){
     <div class="group-body" style="padding:8px 12px 10px">
       ${list.map((t,i)=>{
         const n=subBank.filter(x=>String(x.chapter||'').trim().toLowerCase()===ch.trim().toLowerCase()&&String(x.topic||'').trim().toLowerCase()===t.toLowerCase()).length;
-        return `<div class="list-item"><span>• ${esc(t)} ${n?`<span class="tag green">${n} Qs</span>`:''}</span><span style="display:flex;gap:6px;align-items:center">${n?`<button type="button" class="btn secondary" style="padding:4px 8px;font-size:10px" data-sub="${esc(sub)}" data-chap="${esc(ch)}" data-topic="${esc(t)}" onclick="startTopicQuiz(this)">Start</button>`:''}<button type="button" class="icon-btn" style="padding:2px 6px" data-sub="${esc(sub)}" data-chap="${esc(ch)}" data-i="${i}" onclick="deletePracticeTopic(this)">×</button></span></div>`;
-      }).join('')||'<div class="muted" style="font-size:11px;padding:6px 0">Abhi koi topic nahi.</div>'}
+        return `<div class="list-item" style="gap:8px">
+          <span style="flex:1;min-width:0"><b style="font-size:12px">${esc(t)}</b> <span class="tag ${n?'green':''}">${n} Qs</span></span>
+          <span style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+            <button type="button" class="btn ${n?'secondary':'ghost'}" style="padding:4px 8px;font-size:10px" data-sub="${esc(sub)}" data-chap="${esc(ch)}" data-topic="${esc(t)}" onclick="startTopicQuiz(this)">${n?'Start':'0 Qs'}</button>
+            <button type="button" class="icon-btn" style="padding:2px 6px" data-sub="${esc(sub)}" data-chap="${esc(ch)}" data-i="${i}" onclick="deletePracticeTopic(this)">×</button>
+          </span>
+        </div>`;
+      }).join('')||'<div class="muted" style="font-size:11px;padding:6px 0">Abhi koi topic nahi. Neeche naam likh ke Add karo.</div>'}
       <div class="actions" style="margin-top:8px;gap:6px">
         <input placeholder="Naya topic (e.g. Meiosis)" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter'){event.preventDefault();this.nextElementSibling.click()}">
         <button type="button" class="btn" style="padding:5px 10px" data-sub="${esc(sub)}" data-chap="${esc(ch)}" onclick="addPracticeTopic(this)">＋ Add</button>
       </div>
+      <p class="muted" style="font-size:10px;margin:8px 0 0;line-height:1.5">Tip: Quiz start tab hota hai jab imported JSON mein same chapter + <b>"topic"</b> field match kare. Bina topic field ke sirf chapter quiz chalega.</p>
     </div>
   </details>`;
 }
@@ -2433,6 +2443,200 @@ window.addTrackChapter=e=>{e.preventDefault();const cfg=TRACK[trackTab],name=e.t
 function allRevs(){const out=db.revisions.map(r=>({date:r.date,chapter:r.chapter,subject:r.subject,kind:r.kind,r3:r.r3,r7:r.r7,r21:r.r21}));for(const sub of Object.keys(db.chapters))for(const c of db.chapters[sub])for(const [k,d] of Object.entries(c.t||{}))if(/^r\d$/.test(k))out.push({date:d,chapter:c.name,subject:sub,kind:'Revision '+k.slice(1)});return out.sort((a,b)=>b.date.localeCompare(a.date))}
 function covg(k,key){const l=tabChapters(TRACK[k]);return l.length?Math.round(l.filter(c=>key==='done'?c.done:(c.t||{})[key]).length/l.length*100):0}
 
+/* Past ~10 years chapter/topic weightage (Ankur Sir style analysis + Biology research). Counts = PYQ frequency. */
+const NEET_ANALYSIS={
+  Physics:[
+    {ch:'Current Electricity',n:46,topics:[['Combination of resistances',9],['Resistance and resistivity',7],['Electric power and heating effect',6],['Potentiometer',5],['Current, density and drift velocity',4],["Kirchhoff's laws",3],['Colour coding of resistance',3],['Wheatstone bridge',3],['Cell, battery and combinations',3],['Galvanometer, voltmeter, ammeter',2],['Meter bridge',1]]},
+    {ch:'Semiconductor',n:42,topics:[['Semiconductor and PN junction diode',20],['Digital circuits',15],['Transistors',8]]},
+    {ch:'Heat and Thermodynamics',n:40,topics:[['KTG and gas laws',14],['Thermodynamic processes',11],['Heat engine, Second law, Carnot',4],['Heat transfer',3],['Zeroth and First law',3],['Degree of freedom / equipartition',3],['Specific heat, calorimetry',2]]},
+    {ch:'Matter, Fluids and Solids',n:39,topics:[['Mechanical properties of solids',10],["Fluid flow, Bernoulli, viscosity",8],['Surface tension, excess pressure, capillarity',8],['Stress-strain, thermal stress',5],["Pressure, density, Pascal, Archimedes",4],["Newton's law of cooling",4]]},
+    {ch:'Atoms and Nuclei',n:38,topics:[["Bohr's model and hydrogen spectrum",17],['Nucleus and radioactivity',13],['Nuclear fission, fusion, binding energy',4],['Alpha scattering and Rutherford model',4]]},
+    {ch:'Geometrical Optics',n:37,topics:[['Refraction, TIR and Prism',16],['Lenses',11],['Optical instruments',6],['Reflection of light',4]]},
+    {ch:'Alternating Current',n:34,topics:[['AC circuits and power',25],['Growth and decay of current',4],['AC generator and transformer',4],['Quality factor',1]]},
+    {ch:'Electrostatics',n:32,topics:[['Electric potential energy and potential',11],['Electric dipole',8],["Charges and Coulomb's law",5],['Electric flux and Gauss law',4],['Electric field and intensity',4]]},
+    {ch:'Rotational Motion',n:31,topics:[['Moment of inertia',12],['Combined translational and rotational',7],['Torque',7],['Angular momentum',5]]},
+    {ch:'Units and Dimensions',n:29,topics:[['Dimensions of physical quantities',13],['Errors in measurements',6],['Screw gauge',4],['Significant figures',3],['Vernier calipers',2],['Units of physical quantities',1]]},
+    {ch:'Moving Charges and Magnetism',n:29,topics:[["Biot-Savart's law and magnetic field",9],["Ampere's circuital law",7],['Force and torque on conductor',6],['Motion of charged particle in B-field',5],['Magnetic moment',1],['Moving coil galvanometer',1]]},
+    {ch:'Dual Nature of Radiation and Matter',n:28,topics:[['Photoelectric effect',12],['Matter waves',12],['Particle nature of light / photon',4]]},
+    {ch:'Wave Optics',n:24,topics:[['Huygens principle and interference',13],['Polarisation',7],['Diffraction and Doppler of light',2],['Optical instruments',2]]},
+    {ch:'Oscillations',n:21,topics:[['Mathematical representation of SHM',5],['Spring-mass system',5],['Simple pendulum',4],['Energy in SHM',3],['SHM basics',3],['Damped and forced oscillations',1]]},
+    {ch:'Capacitor',n:20,topics:[['Capacitance and combinations',12],['Energy stored in capacitor',5],['Dielectrics',3]]},
+    {ch:'Magnetism and Matter',n:20,topics:[['Bar magnet and earth magnetism',10],['Magnetic materials and hysteresis',6],['Magnetic properties of materials',4]]},
+    {ch:'Work, Energy and Power',n:19,topics:[['Work-energy theorem',8],['Conservation of energy',6],['Power and collisions energy',5]]},
+    {ch:'Laws of Motion',n:18,topics:[["Newton's laws and applications",10],['Friction',5],['Circular motion dynamics',3]]},
+    {ch:'COM and Collision',n:17,topics:[['Centre of mass',8],['Collisions (elastic/inelastic)',7],['Impulse and momentum',2]]},
+    {ch:'Motion in a Plane',n:16,topics:[['Projectile motion',10],['Relative velocity in 2D',4],['Uniform circular motion',2]]},
+    {ch:'Waves',n:16,topics:[['Progressive waves and superposition',8],['Beats and Doppler',5],['Standing waves',3]]},
+    {ch:'Motion in a Straight Line',n:15,topics:[['Kinematic equations',8],['Graphs of motion',5],['Relative velocity 1D',2]]},
+    {ch:'EMW',n:15,topics:[['EM spectrum and properties',10],['Displacement current',5]]},
+    {ch:'EMI',n:12,topics:[['Faraday and Lenz law',7],['Self and mutual inductance',5]]}
+  ],
+  Chemistry:[
+    {ch:'Chemical Bonding',n:47,topics:[['Hybridization and VSEPR',20],['Molecular orbital theory',8],['Dipole moment',5],['Hydrogen bonding',3],['Bond parameters',3],['Covalent and coordinate bond',2],['Van der Waals forces',2],['Lewis theory',1],['Resonance',1],['Ionic bond',1]]},
+    {ch:'GOC',n:44,topics:[['Isomerism',11],['IUPAC nomenclature',7],['Stability of intermediates',7],['Purification of organic compounds',7],['Electron displacement effects',3],['Acid and base strength',3],['Qualitative analysis of organics',3],['Aromaticity',2],['Attacking reagents',1]]},
+    {ch:'Periodic Table',n:44,topics:[['Periodic trends (IE, EN, size)',20],['s,p,d,f block classification',12],['Electronic configuration patterns',8],['Anomalous behaviour',4]]},
+    {ch:'P-Block Elements',n:41,topics:[['Group 15–18 compounds and trends',18],['Important reactions of p-block',12],['Oxides, hydrides, halides',8],['Interhalogen compounds',3]]},
+    {ch:'Aldehyde Ketones and Carboxylic acid',n:38,topics:[['Reactions of aldehydes and ketones',17],['Preparation, properties of carboxylic acids',11],['Preparation methods for carbonyls',5],['Tests for aldehydes and ketones',2],['Aldehyde preparation methods',2],['Reactions involving aldehydes',1]]},
+    {ch:'Coordination Compounds',n:34,topics:[['Nomenclature and isomerism',12],['Werner theory and ligands',8],['CFT and colour/magnetic properties',8],['Stability and applications',6]]},
+    {ch:'Chemical Kinetics',n:29,topics:[['Arrhenius equation',8],['Integrated rate law equations',7],['Rate laws and rate constant',6],['Rate of reaction',5],['Methods to determine order',2],['Nuclear chemistry',1]]},
+    {ch:'Electrochemistry',n:28,topics:[['Electrochemical series, cell, EMF',16],['Conductance and electrolysis',11],['Batteries, fuel cells, corrosion',1]]},
+    {ch:'Hydrocarbons',n:28,topics:[['Reactions of alkenes',9],['Aromatic hydrocarbons',7],['Reactions of alkanes',3],['Reactions of alkynes',3],['Properties/prep of alkanes',2],['Properties/prep of alkenes',2],['Properties/prep of alkynes',2]]},
+    {ch:'D and F Block Elements',n:28,topics:[['Transition metals properties',14],['Lanthanoids and actinoids',8],['KMnO4 / K2Cr2O7',6]]},
+    {ch:'Thermodynamics',n:26,topics:[['Enthalpies and Hess law',6],['Fundamentals of thermodynamics',6],['First law of thermodynamics',6],['Entropy, free energy, spontaneity',6],['Second law of thermodynamics',2]]},
+    {ch:'Structure of Atom',n:23,topics:[['Quantum numbers and orbitals',10],['Hydrogen spectrum',3],["Bohr's model",3],['Electronic configuration and nodes',2],['Quantum mechanical model',1],['Photoelectric effect',1],['De-Broglie hypothesis',1],['Heisenberg uncertainty',1],['Thomson and Rutherford models',1]]},
+    {ch:'Mole Concept',n:22,topics:[['Mole concept basics',11],['Quantitative measures in equations',5],['Concentration terms',3],['Laws of chemical combination',2],['Significant figures',1]]},
+    {ch:'Amines',n:22,topics:[['Diazonium salts and N-compounds',9],['Aromatic amines',8],['Aliphatic amines',5]]},
+    {ch:'Alcohol Phenols and Ethers',n:21,topics:[['Alcohols — prep, properties, uses',8],['Phenols — prep, properties, uses',7],['Ethers — prep, properties, uses',6]]},
+    {ch:'Ionic Equilibrium',n:19,topics:[['Solubility product and common ion',7],['pH, buffer and indicators',7],["Ostwald dilution and acid-base concepts",5]]},
+    {ch:'Solutions',n:19,topics:[["Relative lowering of VP and Raoult's law",6],['Elevation in boiling point',4],['Osmotic pressure',3],['Depression in freezing point',3],["Henry's law",2],["Abnormal colligative / van't Hoff",1]]},
+    {ch:'Haloalkanes and Haloarenes',n:19,topics:[['Haloalkanes',12],['Haloarenes',5],['Polyhalogen compounds',2]]},
+    {ch:'Biomolecules',n:19,topics:[['Carbohydrates',8],['Proteins and enzymes',7],['Vitamins and nucleic acids',4]]},
+    {ch:'Chemical Equilibrium',n:14,topics:[['Law of mass action and Kc/Kp',11],["Le Chatelier's principle",3]]},
+    {ch:'Redox Reactions',n:11,topics:[['Oxidation number',4],['Types of redox reactions',3],['Balancing redox',2],['Oxidation and reduction',2]]}
+  ],
+  Biology:[
+    {ch:'Molecular Basis of Inheritance',n:60,topics:[['DNA structure and replication',18],['Transcription and genetic code',14],['Translation and gene expression',12],['Human genome and DNA fingerprinting',8],['Operon and regulation',8]]},
+    {ch:'Morphology of Flowering Plants',n:49,topics:[['Root, stem, leaf morphology',16],['Inflorescence and flower',14],['Fruit and seed',10],['Families (Fabaceae, Solanaceae, Liliaceae)',9]]},
+    {ch:'Cell: The Unit of Life',n:44,topics:[['Cell organelles structure/function',18],['Plasma membrane and cell wall',10],['Prokaryotic vs eukaryotic',8],['Nucleus and chromosomes',8]]},
+    {ch:'Sexual Reproduction in Flowering Plants',n:38,topics:[['Microsporogenesis and male gametophyte',12],['Megasporogenesis and female gametophyte',10],['Pollination and fertilization',10],['Endosperm and seed development',6]]},
+    {ch:'Principles of Inheritance and Variation',n:37,topics:[['Mendelian laws and crosses',14],['Linkage, recombination, maps',8],['Sex determination and disorders',8],['Pedigree analysis',7]]},
+    {ch:'Biotechnology: Principles and Processes',n:36,topics:[['Tools (enzymes, vectors, hosts)',14],['Recombinant DNA technology steps',12],['PCR, gel electrophoresis, bioreactors',10]]},
+    {ch:'Plant Kingdom',n:35,topics:[['Algae and bryophytes',12],['Pteridophytes and gymnosperms',10],['Angiosperm life cycles',8],['Plant classification systems',5]]},
+    {ch:'Animal Kingdom',n:35,topics:[['Non-chordates (Porifera to Echinodermata)',18],['Chordates overview',10],['Basis of classification',7]]},
+    {ch:'Structural Organisation in Animals',n:35,topics:[['Animal tissues',16],['Cockroach / frog morphology',12],['Earthworm anatomy',7]]},
+    {ch:'Biomolecules',n:33,topics:[['Proteins and amino acids',10],['Carbohydrates and lipids',8],['Enzymes and kinetics',8],['Nucleic acids and metabolites',7]]},
+    {ch:'Biotechnology and Its Applications',n:31,topics:[['Bt crops and transgenic plants',10],['Gene therapy and molecular diagnosis',10],['Ethical issues and biopiracy',6],['Insulin, vaccines, transgenic animals',5]]},
+    {ch:'Human Reproduction',n:31,topics:[['Male and female reproductive systems',12],['Gametogenesis',8],['Menstrual cycle and fertilization',7],['Pregnancy and parturition',4]]},
+    {ch:'Human Health and Disease',n:30,topics:[['Infectious diseases and pathogens',12],['Immunity and vaccines',10],['Cancer, AIDS, drugs',8]]},
+    {ch:'Cell Cycle and Cell Division',n:28,topics:[['Mitosis',10],['Meiosis',10],['Cell cycle regulation',8]]},
+    {ch:'Chemical Coordination and Integration',n:28,topics:[['Endocrine glands and hormones',16],['Mechanism of hormone action',8],['Disorders of endocrine system',4]]},
+    {ch:'Photosynthesis in Higher Plants',n:26,topics:[['Light reaction and pigments',10],['Calvin cycle and C4 pathway',10],['Factors affecting photosynthesis',6]]},
+    {ch:'Human Physiology — Neural Control',n:24,topics:[['Neuron and synapse',10],['CNS and PNS',8],['Reflex and sense organs',6]]},
+    {ch:'Ecology — Organisms and Populations',n:24,topics:[['Population attributes and growth',12],['Adaptations',6],['Interactions',6]]},
+    {ch:'Ecosystem',n:22,topics:[['Energy flow and trophic levels',10],['Ecological pyramids and productivity',7],['Nutrient cycles',5]]},
+    {ch:'Breathing and Exchange of Gases',n:20,topics:[['Respiratory organs and mechanism',10],['Gas transport and exchange',7],['Disorders of respiration',3]]},
+    {ch:'Body Fluids and Circulation',n:20,topics:[['Blood composition and groups',8],['Heart structure and cardiac cycle',8],['ECG and disorders',4]]},
+    {ch:'Excretory Products and Their Elimination',n:18,topics:[['Kidney and nephron',10],['Urine formation and regulation',6],['Disorders of excretory system',2]]},
+    {ch:'Locomotion and Movement',n:16,topics:[['Skeletal muscle and contraction',10],['Joints and disorders',6]]},
+    {ch:'Reproductive Health',n:16,topics:[['Contraception and STIs',8],['Infertility and ARTs',5],['Population control',3]]},
+    {ch:'Evolution',n:16,topics:[['Theories and evidences of evolution',8],['Hardy-Weinberg and speciation',5],['Human evolution',3]]},
+    {ch:'Microbes in Human Welfare',n:14,topics:[['Microbes in industry and sewage',8],['Biofertilizers and biocontrol',6]]},
+    {ch:'Biodiversity and Conservation',n:14,topics:[['Biodiversity patterns and loss',8],['Conservation strategies',6]]},
+    {ch:'Respiration in Plants',n:14,topics:[['Glycolysis and Krebs cycle',8],['Electron transport and fermentation',6]]},
+    {ch:'Plant Growth and Development',n:12,topics:[['Plant hormones',8],['Photoperiodism and vernalisation',4]]}
+  ]
+};
+
+window.setAnalysisTab=t=>{analysisTab=t;render()};
+function analysisDoneKey(sub,ch,topic){return [sub,ch,topic].map(x=>String(x||'').trim().toLowerCase()).join('||')}
+window.toggleAnalysisDone=(sub,ch,topic)=>{
+  db.analysisDone=db.analysisDone||{};
+  const k=analysisDoneKey(sub,ch,topic);
+  if(db.analysisDone[k])delete db.analysisDone[k];
+  else db.analysisDone[k]=today();
+  save();render();
+};
+window.markChapterAnalysisDone=(sub,ch,force)=>{
+  db.analysisDone=db.analysisDone||{};
+  const block=(NEET_ANALYSIS[sub]||[]).find(x=>x.ch===ch);
+  if(!block)return;
+  const allDone=block.topics.every(([t])=>db.analysisDone[analysisDoneKey(sub,ch,t)]);
+  const next=typeof force==='boolean'?force:!allDone;
+  block.topics.forEach(([t])=>{
+    const k=analysisDoneKey(sub,ch,t);
+    if(next)db.analysisDone[k]=db.analysisDone[k]||today();
+    else delete db.analysisDone[k];
+  });
+  save();render();
+  toast(next?`${ch}: all topics ticked.`:`${ch}: ticks cleared.`);
+};
+function seedAnalysisTopicsToPractice(){
+  db.topics=db.topics||{};
+  let added=0;
+  for(const sub of ['Physics','Chemistry','Biology']){
+    for(const block of (NEET_ANALYSIS[sub]||[])){
+      const key=topicKey(sub,block.ch);
+      const list=db.topics[key]=db.topics[key]||[];
+      const have=new Set(list.map(t=>t.toLowerCase()));
+      for(const [t] of block.topics){
+        if(!have.has(t.toLowerCase())){list.push(t);have.add(t.toLowerCase());added++}
+      }
+    }
+  }
+  if(added)save();
+  return added;
+}
+window.seedAnalysisTopicsToPractice=()=>{
+  const n=seedAnalysisTopicsToPractice();
+  toast(n?`${n} high-yield topics Practice me add ho gaye.`:'Saare analysis topics pehle se Practice me hain.');
+  if(current==='practice')render();
+};
+
+function analysisView(){
+  title('NEET Analysis');
+  const sub=analysisTab in NEET_ANALYSIS?analysisTab:'Physics';
+  const list=NEET_ANALYSIS[sub]||[];
+  db.analysisDone=db.analysisDone||{};
+  let totalTopics=0,doneTopics=0,totalPyq=0;
+  list.forEach(b=>{
+    totalPyq+=b.n||0;
+    b.topics.forEach(([t])=>{
+      totalTopics++;
+      if(db.analysisDone[analysisDoneKey(sub,b.ch,t)])doneTopics++;
+    });
+  });
+  const pct=totalTopics?Math.round(doneTopics/totalTopics*100):0;
+  return `<div class="stats">
+    ${stat('SUBJECT',sub,'Past ~10 yrs PYQ map')}
+    ${stat('CHAPTERS',list.length,'High-yield ordered')}
+    ${stat('TOPICS DONE',`${doneTopics}/${totalTopics}`,`${pct}% ticked`)}
+    ${stat('Σ PYQ SIGNAL',totalPyq,'Relative frequency')}
+  </div>
+  <div class="card" style="margin-bottom:14px">
+    <div class="section-head" style="margin:0 0 10px"><h2>NEET chapter × topic weightage</h2><small>TICK WHEN DONE</small></div>
+    <p class="muted" style="font-size:12px;line-height:1.6;margin:0 0 12px">Physics & Chemistry numbers follow last-10-years chapterwise analysis (Ankur Sir style). Biology is compiled from multi-year PYQ frequency research. Ye ranking relative hai — exact paper me count vary karta hai. Har topic ke saamne tick lagao jab complete / revise ho jaye.</p>
+    <div class="tabs three">
+      ${['Physics','Chemistry','Biology'].map(s=>`<button type="button" class="tab ${sub===s?'active':''}" onclick="setAnalysisTab('${s}')">${s}</button>`).join('')}
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <button type="button" class="btn secondary" onclick="seedAnalysisTopicsToPractice()">＋ High-yield topics → Practice</button>
+      <span class="muted" style="font-size:11px">Practice & Quiz me chapter ke Topics list me add ho jayenge.</span>
+    </div>
+  </div>
+  ${list.map(b=>{
+    const done=b.topics.filter(([t])=>db.analysisDone[analysisDoneKey(sub,b.ch,t)]).length;
+    const all=b.topics.length;
+    const open=topicOpenGroups.has('an||'+sub+'||'+b.ch);
+    return `<details class="group" data-key="an||${esc(sub)}||${esc(b.ch)}" ${open?'open':''} ontoggle="toggleTopicGroup(this)">
+      <summary>
+        <span><b>${esc(b.ch)}</b> <span class="tag gold">${b.n} PYQ</span> <span class="tag ${done===all&&all?'green':''}">${done}/${all} topics</span></span>
+        <span class="muted" style="font-size:10px">${Math.round(done/all*100)||0}%</span>
+      </summary>
+      <div class="group-body" style="padding:4px 12px 12px">
+        <div class="actions" style="margin:6px 0 8px">
+          <button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick='markChapterAnalysisDone(${JSON.stringify(sub)},${JSON.stringify(b.ch)})'>${done===all?'Clear all ticks':'Tick all topics'}</button>
+        </div>
+        ${b.topics.map(([t,n])=>{
+          const k=analysisDoneKey(sub,b.ch,t);
+          const isOn=!!db.analysisDone[k];
+          const jsSub=JSON.stringify(sub),jsCh=JSON.stringify(b.ch),jsT=JSON.stringify(t);
+          return `<div class="list-item" style="gap:10px">
+            <label style="display:flex;align-items:center;gap:10px;flex:1;cursor:pointer;margin:0">
+              <input type="checkbox" ${isOn?'checked':''} onchange='toggleAnalysisDone(${jsSub},${jsCh},${jsT})' style="width:16px;height:16px;accent-color:var(--red)">
+              <span style="${isOn?'text-decoration:line-through;color:var(--muted)':''}">${esc(t)}</span>
+            </label>
+            <span class="tag ${n>=10?'gold':n>=5?'blue':''}">${n} Qs</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </details>`;
+  }).join('')}
+  <div class="card" style="margin-top:14px">
+    <h3>How to use</h3>
+    <p class="muted" style="font-size:12px;line-height:1.7;margin:0">1) Subject tab choose karo → high PYQ chapters pehle. 2) Topic complete hone pe checkbox tick. 3) “High-yield topics → Practice” se same names Practice chapters me Topics list me aa jayenge — phir JSON import me <code>"topic"</code> field match karke topic quiz start kar sakte ho. 4) Existing dashboard / missions / mock lab bilkul same rahenge.</p>
+  </div>`;
+}
+
 const LAB_KEYS=[['physics','Physics',45,180],['chemistry','Chemistry',45,180],['botany','Botany',45,180],['zoology','Zoology',45,180]];
 function labList(){return (db.mockLabs||[]).slice().sort((a,b)=>a.date.localeCompare(b.date)||a.name.localeCompare(b.name))}
 function labPart(a){return (a?.c||0)*4-(a?.w||0)}
@@ -2562,7 +2766,7 @@ function mockLabView(){
 }
 
 function render(){
-  let html={dashboard,missions,subjects,focus,practice:practiceView,mistakes,revision,tests,mocklab:mockLabView,vault,aitutor:aiTutorView,analytics}[current]();
+  let html={dashboard,missions,subjects,focus,practice:practiceView,analysis:analysisView,mistakes,revision,tests,mocklab:mockLabView,vault,aitutor:aiTutorView,analytics}[current]();
   document.getElementById('view').innerHTML=html;
   bindForms();
   updateTopFocusUI();
@@ -2703,6 +2907,11 @@ window.removeItem=(list,id)=>{db[list]=db[list].filter(x=>x.id!==id);save();rend
 const exportBtnEl=document.getElementById('exportBtn');
 if(exportBtnEl)exportBtnEl.onclick=()=>{let blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`igris-backup-${today()}.json`;a.click();URL.revokeObjectURL(a.href);toast('Backup downloaded.')};
 if(!db.syllabusLoaded&&Object.values(db.chapters).every(a=>!a.length))loadSyllabus(true);
+if(!db.analysisTopicsSeeded){
+  seedAnalysisTopicsToPractice();
+  db.analysisTopicsSeeded=true;
+  save();
+}
 render();
 checkDueReminders();
 clearInterval(reminderInterval);
