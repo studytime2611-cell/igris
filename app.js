@@ -535,6 +535,15 @@ function backlogDueList(){
       }
     }
   }
+  const have=new Set(out.map(x=>String(x.name).toLowerCase()));
+  for(const o of mistakeInsights()){
+    const weakN=Object.entries(o.types).filter(([k])=>WEAKISH_TYPES.includes(k)).reduce((a,[,n])=>a+n,0);
+    const nm=String(o.chapter);
+    if(weakN>=3&&!have.has(nm.toLowerCase())){
+      out.push({sub:o.sub||'General',name:nm,reason:`${weakN} open mistakes • mostly ${o.topType}`});
+      have.add(nm.toLowerCase());
+    }
+  }
   return out;
 }
 
@@ -1486,6 +1495,27 @@ function saveQuizAttemptIfDone(){
   toast(`Attempt saved (${acc}% • ${avgSec}s/Q)!`);
 }
 
+const WHY_OPTS=['Silly mistake','Concept gap','Lack of revision','Not reading properly','Calculation','Formula recall','Other'];
+function whyBoxInner(m){
+  const cur=m.type;
+  return `<div class="muted" style="font-size:11px;margin-bottom:8px">Kyu galat hua? <span style="opacity:.7">(Mistake Hunter me save hota hai)</span></div>
+  <div class="why-chips">${WHY_OPTS.map(o=>`<button type="button" class="why-chip ${cur===o?'active':''}" onclick="setWhyWrong('${m.id}','${o}')">${o}</button>`).join('')}</div>
+  ${cur==='Other'?`<input class="why-note" placeholder="Apna reason likho…" value="${esc(m.whyNote||'')}" oninput="setWhyNote('${m.id}',this.value)">`:''}`;
+}
+function whyForQuestionHTML(q){
+  if(!quizAnswered||quizPickedIdx===-1||quizPickedIdx===q.ans)return '';
+  const m=db.mistakes.find(x=>!x.closed&&String(x.error||'').includes(String(q.q||'').slice(0,45)));
+  return m?`<div class="why-box" id="whyBox">${whyBoxInner(m)}</div>`:'';
+}
+// DOM-only update: no render(), so quiz timer / scroll are untouched
+window.setWhyWrong=(id,opt)=>{
+  const m=db.mistakes.find(x=>x.id===id);if(!m)return;
+  m.type=opt;if(opt!=='Other')delete m.whyNote;
+  save();
+  const el=document.getElementById('whyBox');if(el)el.innerHTML=whyBoxInner(m);
+};
+window.setWhyNote=(id,v)=>{const m=db.mistakes.find(x=>x.id===id);if(m){m.whyNote=v;save()}};
+
 window.answerQuizOpt=(choiceIdx)=>{
   if(quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
   quizAnswered=true;
@@ -1506,7 +1536,7 @@ window.answerQuizOpt=(choiceIdx)=>{
         id:crypto.randomUUID(),
         date:today(),
         subject:curQ.subject||'Biology',
-        type:skipDrill?'Time management':'Concept gap',
+        type:skipDrill?'Time management':'Untagged',
         chapter:curQ.chapter||'Quiz Practice',
         error:`Wrong MCQ [${mk}]: ${curQ.q} (Picked: ${curQ.opts[choiceIdx]}) | True Answer: ${trueAnsText}`,
         fix:curQ.exp?`True Answer: ${trueAnsText}. ${curQ.exp}`:`True Answer: ${trueAnsText}.`
@@ -1672,6 +1702,7 @@ function practiceView(){
             }).join('')}
             ${!quizAnswered&&skipDrill?`<div class="actions" style="margin-top:10px"><button type="button" class="btn secondary" onclick="skipQuizQuestion()">⏭ Skip (0 marks)</button><span class="muted" style="font-size:11px">Net ${drillNet} • R${drillRight} W${drillWrong} S${drillSkip}</span></div>`:''}
             ${quizAnswered?`<div class="ai-reply-box" style="${quizPickedIdx!==q.ans&&quizPickedIdx!==-1?'border-color:#ef4444':''}"><b>${quizPickedIdx===-1?'Skipped. ':''}True Answer: ${String.fromCharCode(65+q.ans)}. ${esc(q.opts[q.ans])}</b> • Tag: <b>${esc(curMark)}</b>\n${esc(q.exp||'Review this concept before moving on.')}</div>
+            ${whyForQuestionHTML(q)}
             <div class="actions" style="margin-top:12px"><button type="button" class="btn" onclick="nextQuizQuestion()">${quizIdx+1<activeQuiz.length?'Next Question →':'Finish & Save Attempt'}</button></div>`:''}
           </div>`;
         })() : activeQuiz && quizIdx >= activeQuiz.length ? (()=>{
@@ -1946,7 +1977,7 @@ function mistakeItemHTML(m){
   return `<div class="list-item" style="align-items:flex-start;${isWrongMcq?'background:#2a0d14;border:1px solid #8f1e2b':''}">
           <div>
             <b>${esc(m.chapter)}</b> ${isWrongMcq?'<span class="tag" style="background:#5e141f;color:#fca5a5;border-color:#ef4444">WRONG MCQ</span>':''}
-            <div class="muted" style="margin:4px 0">${esc(m.subject)} • ${esc(m.type)} • ${m.date}</div>
+            <div class="muted" style="margin:4px 0">${esc(m.subject)} • ${esc(m.type)}${m.whyNote?` (${esc(m.whyNote)})`:''} • ${m.date}</div>
             <div style="${isWrongMcq?'color:#fecaca;font-weight:600':''}">${esc(m.error)}</div>
             ${m.fix?`<div style="color:#86efac;margin-top:5px"><b>True Answer / Fix:</b> ${esc(m.fix)}</div>`:''}
             <div class="actions" style="margin-top:8px">
@@ -1981,7 +2012,7 @@ function mistakes(){
       <form id="mistakeForm">
         <div class="form-grid">
           <div class="field"><label>SUBJECT</label><select name="subject" id="mistakeSubSelect" onchange="refreshMistakeChapterOptions(this.value)"><option>Physics</option><option>Chemistry</option><option>Biology</option></select></div>
-          <div class="field"><label>ERROR TYPE</label><select name="type"><option>Concept gap</option><option>Calculation</option><option>Formula recall</option><option>Misread question</option><option>Memory / NCERT</option><option>Time management</option></select></div>
+          <div class="field"><label>ERROR TYPE</label><select name="type"><option>Silly mistake</option><option>Concept gap</option><option>Lack of revision</option><option>Not reading properly</option><option>Calculation</option><option>Formula recall</option><option>Misread question</option><option>Memory / NCERT</option><option>Time management</option><option>Other</option></select></div>
         </div>
         <div class="field">
           <label>SELECT CHAPTER (ALL SUBJECTS SUPPORTED)</label>
@@ -2315,6 +2346,50 @@ function updateStreakBadge(){
   if(el)el.textContent=streakLabel();
 }
 
+const WHY_FIX={
+  'Silly mistake':'Option elimination + last 10 sec double-check',
+  'Concept gap':'Lecture/NCERT dobara + us topic ke 10 PYQs',
+  'Lack of revision':'Revision Log me +3/+7/+21 schedule karo',
+  'Not reading properly':'Question 2 baar padho, NOT/EXCEPT/incorrect underline karo',
+  'Misread question':'Question 2 baar padho, keywords underline karo',
+  'Calculation':'Rough work neat rakho + unit check',
+  'Formula recall':'Formula flashcards roz 5 min',
+  'Memory / NCERT':'NCERT line-by-line + active recall',
+  'Time management':'Timed drills + skip rule',
+  'Other':'Note padho, pattern dhundo',
+  'Untagged':'Quiz me galat ke baad reason chip tap karo'
+};
+const WEAKISH_TYPES=['Concept gap','Lack of revision','Memory / NCERT','Formula recall'];
+/** Open (unfixed) mistakes grouped by chapter, with the most common reason per chapter. */
+function mistakeInsights(){
+  const by={};
+  for(const m of db.mistakes){
+    if(m.closed)continue;
+    const key=(m.subject||'')+'||'+(m.chapter||'General');
+    const o=by[key]=by[key]||{sub:m.subject,chapter:m.chapter||'General',total:0,types:{}};
+    const ty=m.type||'Untagged';
+    o.total++;o.types[ty]=(o.types[ty]||0)+1;
+  }
+  return Object.values(by).map(o=>{
+    const top=Object.entries(o.types).sort((a,b)=>b[1]-a[1])[0];
+    return {...o,topType:top[0],topCount:top[1]};
+  }).sort((a,b)=>b.total-a.total);
+}
+function mistakeInsightsHTML(){
+  const open=db.mistakes.filter(m=>!m.closed);
+  if(!open.length)return `<div class="card" style="margin-top:14px"><h3>Why you go wrong</h3><div class="empty">Open mistakes aate hi yaha reason-wise pattern dikhega.</div></div>`;
+  const cnt={};open.forEach(m=>{const t=m.type||'Untagged';cnt[t]=(cnt[t]||0)+1});
+  const rows=Object.entries(cnt).sort((a,b)=>b[1]-a[1]);
+  const tagged=rows.filter(([k])=>k!=='Untagged');
+  const top=tagged[0];
+  const fixLine=top?`<p class="muted" style="font-size:11px;margin-top:12px;line-height:1.6">Sabse zyada: <b>${esc(top[0])}</b> (${top[1]}/${open.length}) → ${esc(WHY_FIX[top[0]]||'')}</p>`:`<p class="muted" style="font-size:11px;margin-top:12px">Abhi sab mistakes Untagged hain — quiz me galat ke baad reason chip tap karo.</p>`;
+  const hot=mistakeInsights().filter(o=>o.total>=2).slice(0,6);
+  return `<div class="grid2" style="margin-top:14px">
+    <div class="card"><h3>Why you go wrong (open mistakes)</h3>${hbars(rows.map(([k,v])=>({label:k,value:v})))}${fixLine}</div>
+    <div class="card"><h3>Chapter hotspots</h3>${hot.length?hot.map(o=>`<div class="list-item" style="align-items:flex-start"><div><b>${esc(o.chapter)}</b> <span class="tag blue">${esc(o.sub||'General')}</span><div class="muted" style="margin-top:3px">${o.total} open • mostly ${esc(o.topType)} (${o.topCount}) → ${esc(WHY_FIX[o.topType]||'')}</div></div></div>`).join(''):'<div class="empty">Jis chapter me 2+ open mistakes honge wo yaha aayega.</div>'}<p class="muted" style="font-size:10px;margin-top:10px;line-height:1.6">Concept gap / Revision / Memory / Formula wali 3+ mistakes wala chapter Weak backlog me bhi auto aa jata hai.</p></div>
+  </div>`;
+}
+
 function analytics(){
   title('Analytics');
   const k7=dayKeys(7),lab=k7.map(dayLabel),focus7=k7.map(k=>db.sessions.filter(x=>x.date===k).reduce((a,x)=>a+x.minutes,0)),closed7=k7.map(k=>db.tasks.filter(t=>t.done&&(t.doneAt||t.date)===k).length);
@@ -2329,6 +2404,7 @@ function analytics(){
   <div class="grid2"><div class="card"><h3>Focus minutes — last 7 days</h3>${barChart(lab,focus7,'bar-f2')}</div><div class="card"><h3>Missions closed — last 7 days</h3>${barChart(lab,closed7,'bar-m')}</div></div>
   <div class="grid2" style="margin-top:14px"><div class="card"><h3>Mock test score trend</h3>${last.length?lineChart(last.map((t,i)=>'T'+(db.tests.length-last.length+i+1)),last.map(t=>t.score),720):'<div class="empty">Record a mock test to see your trend.</div>'}</div><div class="card"><h3>Subject-wise mock average (%)</h3>${db.tests.length?hbars(subAvg,'%'):'<div class="empty">Add subject scores in a mock test to see this.</div>'}<h3 style="margin-top:22px">Focus time by subject (min)</h3>${totMin?hbars(fSub):'<div class="empty">Log focus sessions to see this.</div>'}</div></div>
   <div class="grid2" style="margin-top:14px"><div class="card"><h3>Mistakes by subject</h3>${db.mistakes.length?hbars(mSub):'<div class="empty">No mistakes recorded yet.</div>'}</div><div class="card"><h3>Mistakes by type</h3>${types.length?hbars(types):'<div class="empty">No mistakes recorded yet.</div>'}<p class="muted" style="font-size:10px;margin-top:14px">Open: ${db.mistakes.filter(m=>!m.closed).length} • Fixed: ${db.mistakes.filter(m=>m.closed).length}</p></div></div>
+  ${mistakeInsightsHTML()}
   <div class="grid2" style="margin-top:14px"><div class="card"><h3>Chapters done (%)</h3>${hbars(TRACK_ORDER.map(k=>({label:TRACK[k].label,value:covg(k,'done')})),'%')}</div><div class="card"><h3>Revision 1 completed (%)</h3>${hbars(TRACK_ORDER.map(k=>({label:TRACK[k].label,value:covg(k,'r1')})),'%')}</div></div>`;
 }
 

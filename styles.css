@@ -350,3 +350,13 @@ details.group[open]>summary{border-bottom-color:#e8eaf0}
   .sidebar{background:#fff;box-shadow:15px 0 40px #20232b18}
   .hero{background-position:center,right center;background-size:cover,auto 100%}
 }
+
+.why-box{margin-top:12px;padding:12px;border:1px solid #3a3944;border-radius:10px;background:#12121a}
+.why-chips{display:flex;flex-wrap:wrap;gap:6px}
+.why-chip{background:#1b1a23;border:1px solid #3a3944;color:#c9c7d1;border-radius:999px;padding:7px 12px;font:600 11px Manrope;cursor:pointer}
+.why-chip.active{background:var(--red);border-color:var(--red);color:#fff}
+.why-note{margin-top:8px;width:100%}
+
+.why-box{background:#fafbfc;border-color:#e4e6eb}
+.why-chip{background:#fff;border-color:#dfe2e8;color:#343a45}
+.why-chip.active{background:var(--red);border-color:var(--red);color:#fff}
