@@ -59,10 +59,23 @@ function load(){
   try{
     const parsed=JSON.parse(localStorage.getItem(KEY)||'{}');
     const base=seed();
-    return {...base,...parsed,settings:{...base.settings,...(parsed.settings||{})}};
+    const merged={...base,...parsed,settings:{...base.settings,...(parsed.settings||{})}};
+    merged.chapters=merged.chapters||{};
+    for(const s of ['Physics','Chemistry','Biology']){
+      if(!Array.isArray(merged.chapters[s]))merged.chapters[s]=Array.isArray(base.chapters[s])?base.chapters[s].slice():[];
+    }
+    merged.tasks=Array.isArray(merged.tasks)?merged.tasks:[];
+    merged.sessions=Array.isArray(merged.sessions)?merged.sessions:[];
+    merged.mistakes=Array.isArray(merged.mistakes)?merged.mistakes:[];
+    merged.quizzes=Array.isArray(merged.quizzes)?merged.quizzes:[];
+    merged.topics=merged.topics&&typeof merged.topics==='object'?merged.topics:{};
+    return merged;
   }catch(e){return seed()}
 }
-function save(){localStorage.setItem(KEY,JSON.stringify(db));}
+function save(){
+  try{localStorage.setItem(KEY,JSON.stringify(db))}
+  catch(e){console.warn('save failed',e);try{toast('Storage full — export backup / clear old quizzes.')}catch(_){}}
+}
 function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function toast(s){let t=document.getElementById('toast');if(!t)return;t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2300)}
 function dateText(d=today()){return new Date(d+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})}
@@ -590,7 +603,7 @@ function dashboard(){
       <div class="section-head"><h2>Focus — last 7 days</h2><small>MINUTES</small></div>
       <div class="card">${barChart(dayKeys(7).map(dayLabel),dayKeys(7).map(k=>db.sessions.filter(x=>x.date===k).reduce((a,x)=>a+x.minutes,0)),'bar-focus')}</div>
       <div class="section-head"><h2>Subject Progress</h2><small>CHAPTERS MARKED COMPLETE</small></div>
-      <div class="card">${['Physics','Chemistry','Biology'].map(s=>progress(s,db.chapters[s].filter(c=>c.done).length,db.chapters[s].length)).join('')||'No chapters yet'}</div>
+      <div class="card">${['Physics','Chemistry','Biology'].map(s=>{const arr=Array.isArray(db.chapters[s])?db.chapters[s]:[];return progress(s,arr.filter(c=>c.done).length,arr.length)}).join('')||'No chapters yet'}</div>
     </div>
     <div>
       <div class="section-head"><h2>Quick Actions</h2><small>COMMAND SHORTCUTS</small></div>
@@ -1297,39 +1310,105 @@ window.startSkipDrill=(n=15)=>{
 
 function parseQuizJsonText(raw){
   let t=String(raw||'').trim();
-  t=t.replace(/^```json\s*/i,'').replace(/^```\s*/i,'').replace(/\s*```$/,'');
-  const start=t.indexOf('['), end=t.lastIndexOf(']');
-  if(start>=0&&end>start)t=t.slice(start,end+1);
-  const arr=JSON.parse(t);
-  if(!Array.isArray(arr)||!arr.length)throw new Error('Empty');
+  if(!t || t==='Thinking...')throw new Error('Empty output');
+  // strip markdown fences anywhere
+  t=t.replace(/```json\s*/gi,'').replace(/```\s*/g,'');
+  // common AI mess: smart quotes, trailing commas before ] or }
+  t=t.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g,'"')
+     .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g,"'")
+     .replace(/,\s*([}\]])/g,'$1');
+  let start=t.indexOf('['), end=t.lastIndexOf(']');
+  if(start<0)throw new Error('No JSON array found ([ ... ])');
+  // if response was truncated (no closing ]), recover complete objects
+  if(end<=start){
+    const slice=t.slice(start);
+    const objs=[];
+    let depth=0, objStart=-1, inStr=false, esc=false;
+    for(let i=0;i<slice.length;i++){
+      const c=slice[i];
+      if(inStr){
+        if(esc)esc=false;
+        else if(c==='\\')esc=true;
+        else if(c==='"')inStr=false;
+        continue;
+      }
+      if(c==='"'){inStr=true;continue}
+      if(c==='{'){if(depth===0)objStart=i;depth++}
+      else if(c==='}'){
+        depth--;
+        if(depth===0&&objStart>=0){
+          try{objs.push(JSON.parse(slice.slice(objStart,i+1)))}catch(_){}
+          objStart=-1;
+        }
+      }
+    }
+    if(!objs.length)throw new Error('JSON incomplete / truncated');
+    t=JSON.stringify(objs);
+  }else{
+    t=t.slice(start,end+1);
+  }
+  let arr;
+  try{arr=JSON.parse(t)}catch(e){
+    // last resort: extract individual {..} objects
+    const objs=[];
+    let depth=0, objStart=-1, inStr=false, escCh=false;
+    for(let i=0;i<t.length;i++){
+      const c=t[i];
+      if(inStr){
+        if(escCh)escCh=false;
+        else if(c==='\\')escCh=true;
+        else if(c==='"')inStr=false;
+        continue;
+      }
+      if(c==='"'){inStr=true;continue}
+      if(c==='{'){if(depth===0)objStart=i;depth++}
+      else if(c==='}'){
+        depth--;
+        if(depth===0&&objStart>=0){
+          try{objs.push(JSON.parse(t.slice(objStart,i+1)))}catch(_){}
+          objStart=-1;
+        }
+      }
+    }
+    if(!objs.length)throw new Error('JSON parse failed: '+(e.message||e));
+    arr=objs;
+  }
+  if(!Array.isArray(arr)||!arr.length)throw new Error('Empty array');
   const cleaned=[];
   for(const item of arr){
-    if(!item.q || !Array.isArray(item.opts) || item.opts.length<2)continue;
+    if(!item||typeof item!=='object')continue;
+    const q=item.q||item.question||item.Q;
+    let opts=item.opts||item.options||item.opt;
+    if(typeof opts==='string'){
+      try{opts=JSON.parse(opts)}catch(_){opts=opts.split(/\n|\|/).map(s=>s.trim()).filter(Boolean)}
+    }
+    if(!q || !Array.isArray(opts) || opts.length<2)continue;
     let ansIdx=0;
-    if(typeof item.ans==='number')ansIdx=Math.max(0,Math.min(item.opts.length-1,item.ans));
-    else if(typeof item.ans==='string'){
-      const letterMap={'A':0,'B':1,'C':2,'D':3};
-      const up=item.ans.trim().toUpperCase();
+    const ans=item.ans??item.answer??item.correct??0;
+    if(typeof ans==='number')ansIdx=Math.max(0,Math.min(opts.length-1,ans));
+    else if(typeof ans==='string'){
+      const letterMap={A:0,B:1,C:2,D:3};
+      const up=ans.trim().toUpperCase();
       if(up in letterMap)ansIdx=letterMap[up];
       else{
-        const found=item.opts.findIndex(o=>o.trim().toLowerCase()===item.ans.trim().toLowerCase());
+        const found=opts.findIndex(o=>String(o).trim().toLowerCase()===ans.trim().toLowerCase());
         ansIdx=found>=0?found:0;
       }
     }
-    const mk=normalizeMark(item.mark||item.tag);
+    const mk=normalizeMark(item.mark||item.tag||item.difficulty);
     cleaned.push({
       id:crypto.randomUUID(),
       subject:item.subject||'Biology',
       chapter:item.chapter||'General Practice',
-      q:String(item.q).trim(),
-      opts:item.opts.map(o=>String(o)),
+      q:String(q).trim(),
+      opts:opts.map(o=>String(o)),
       ans:ansIdx,
       mark:mk,
       topic:String(item.topic||'').trim(),
-      exp:String(item.exp||'').trim()
+      exp:String(item.exp||item.explanation||'').trim()
     });
   }
-  if(!cleaned.length)throw new Error('No valid MCQs');
+  if(!cleaned.length)throw new Error('No valid MCQs (need q + opts[2+])');
   return cleaned;
 }
 window.importBulkJson=()=>{
@@ -1918,7 +1997,9 @@ window.importAiOutputAsQuiz=()=>{
     beginQuizSession(cleaned,{subject:cleaned[0].subject||'Mixed',chapter:chapters.length===1?chapters[0]:'Mixed Chapters'});
     toast(`${cleaned.length} MCQs from AI → quiz started`);
   }catch(err){
-    toast('AI output mein valid JSON array nahi mila.');
+    const why=String(err&&err.message||err);
+    toast('Import fail: '+why);
+    console.warn('importAiOutputAsQuiz',err);
   }
 };
 
@@ -2766,19 +2847,28 @@ function mockLabView(){
 }
 
 function render(){
-  let html={dashboard,missions,subjects,focus,practice:practiceView,analysis:analysisView,mistakes,revision,tests,mocklab:mockLabView,vault,aitutor:aiTutorView,analytics}[current]();
-  document.getElementById('view').innerHTML=html;
-  bindForms();
-  updateTopFocusUI();
-  updateStreakBadge();
-  if(current==='dashboard')startLiveCountdown();
-  if(current==='practice' && practiceTab==='quiz' && activeQuiz && quizIdx<activeQuiz.length)startQuizStopwatch();
-  if(current==='focus'){
-    const stBtn=document.getElementById('startTimer');
-    const rsBtn=document.getElementById('resetTimer');
-    if(stBtn)stBtn.onclick=startTimer;
-    if(rsBtn)rsBtn.onclick=resetCurrentTimer;
-    updateTimerDOM();
+  try{
+    const views={dashboard,missions,subjects,focus,practice:practiceView,analysis:analysisView,mistakes,revision,tests,mocklab:mockLabView,vault,aitutor:aiTutorView,analytics};
+    const fn=views[current]||dashboard;
+    const html=fn();
+    const viewEl=document.getElementById('view');
+    if(viewEl)viewEl.innerHTML=html;
+    bindForms();
+    updateTopFocusUI();
+    try{updateStreakBadge()}catch(_){}
+    if(current==='dashboard')startLiveCountdown();
+    if(current==='practice' && practiceTab==='quiz' && activeQuiz && quizIdx<activeQuiz.length)startQuizStopwatch();
+    if(current==='focus'){
+      const stBtn=document.getElementById('startTimer');
+      const rsBtn=document.getElementById('resetTimer');
+      if(stBtn)stBtn.onclick=startTimer;
+      if(rsBtn)rsBtn.onclick=resetCurrentTimer;
+      updateTimerDOM();
+    }
+  }catch(err){
+    console.error('render failed',current,err);
+    const viewEl=document.getElementById('view');
+    if(viewEl)viewEl.innerHTML=`<div class="card"><h3>Screen load error</h3><p class="muted" style="font-size:12px;line-height:1.6">${esc(String(err&&err.message||err))}</p><div class="actions" style="margin-top:12px"><button type="button" class="btn" onclick="navigate('dashboard')">Reload Dashboard</button></div></div>`;
   }
 }
 
@@ -2906,14 +2996,18 @@ window.removeItem=(list,id)=>{db[list]=db[list].filter(x=>x.id!==id);save();rend
 
 const exportBtnEl=document.getElementById('exportBtn');
 if(exportBtnEl)exportBtnEl.onclick=()=>{let blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`igris-backup-${today()}.json`;a.click();URL.revokeObjectURL(a.href);toast('Backup downloaded.')};
-if(!db.syllabusLoaded&&Object.values(db.chapters).every(a=>!a.length))loadSyllabus(true);
-if(!db.analysisTopicsSeeded){
-  seedAnalysisTopicsToPractice();
-  db.analysisTopicsSeeded=true;
-  save();
-}
-render();
-checkDueReminders();
+try{
+  if(!db.syllabusLoaded&&Object.values(db.chapters||{}).every(a=>!(a&&a.length)))loadSyllabus(true);
+}catch(e){console.warn('syllabus seed',e)}
+try{
+  if(!db.analysisTopicsSeeded){
+    seedAnalysisTopicsToPractice();
+    db.analysisTopicsSeeded=true;
+    save();
+  }
+}catch(e){console.warn('analysis topic seed',e);db.analysisTopicsSeeded=true}
+try{render()}catch(e){console.error('boot render',e)}
+try{checkDueReminders()}catch(_){}
 clearInterval(reminderInterval);
 reminderInterval=setInterval(checkDueReminders,15000);
 const importBtnEl=document.getElementById('importBtn');
