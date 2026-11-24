@@ -21,7 +21,7 @@ const seed=()=>({
   quizzes:[],
   quizAttempts:[],
   upcomingTests:[],
-  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true}
+  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true,dailyGoals:{mins:120,qs:40,missions:3},timerWall:'soft'}
 });
 
 let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All', selectedQuizSubject=null, analysisTab='Physics';
@@ -253,13 +253,20 @@ const TIMER_WALLS=[
   {id:'dusk',label:'🌙 Night study'},
   {id:'peach',label:'🍑 Warm peach'},
   {id:'sky',label:'☁️ Soft sky'},
-  {id:'plain',label:'⬜ Clean'}
+  {id:'plain',label:'⬜ Clean'},
+  {id:'study1',label:'🛏️ Study desk'},
+  {id:'study2',label:'🐱 Cat nap'},
+  {id:'study3',label:'💜 Mom pride'}
 ];
 function applyTimerWallpaper(el){
   if(!el)return;
   const id=(db.settings&&db.settings.timerWall)||'soft';
   TIMER_WALLS.forEach(w=>el.classList.remove('wall-'+w.id));
-  el.classList.add('wall-'+(TIMER_WALLS.some(w=>w.id===id)?id:'soft'));
+  const valid=TIMER_WALLS.some(w=>w.id===id)?id:'soft';
+  el.classList.add('wall-'+valid);
+  el.style.backgroundImage='';
+  el.style.backgroundSize='';
+  el.style.backgroundPosition='';
 }
 window.setTimerWallpaper=id=>{
   db.settings=db.settings||{};
@@ -623,12 +630,15 @@ function dashboard(){
     </div>
   </div>
   ${countdown()}
+  ${dailyGoalsHTML()}
+  ${streakStripHTML()}
   <div class="stats">
     ${stat('STREAK',streakLabel(),'6h focus or 60% missions daily')}
     ${stat('MISSIONS COMPLETED',`${done}/${tasks.length}`,'Today’s task progress')}
     ${stat('FOCUS TIME',`${Math.floor(mins/60)}h ${mins%60}m`,`${qCount} Qs logged today`)}
     ${stat('OPEN MISTAKES',openMistakes,`${db.mistakes.length} total tracked`)}
   </div>
+  ${revisionQueueHTML()}
   <div class="two-col">
     <div>
       <div class="section-head"><h2>Today's Missions</h2><small>${dateText()}</small></div>
@@ -2598,10 +2608,10 @@ function getMockPoolPreview(){
   const bank=db.quizzes||[];
   const openMistakes=db.mistakes.filter(m=>!m.closed);
   const subSet=new Set((mockBuild.subjects||[]).map(s=>s.toLowerCase()));
-  const chapSet=new Set(mockBuild.chapters||[]);
+  const chapSet=new Set((mockBuild.chapters||[]).map(c=>String(c).trim()));
   const matchChap=q=>{
-    if(!chapSet.size)return true;
-    return chapSet.has(q.chapter);
+    if(!chapSet.size)return true; // empty = all
+    return chapSet.has(String(q.chapter||'').trim());
   };
   const matchSub=q=>subSet.has(String(q.subject||'').trim().toLowerCase());
   let pool=[];
@@ -2622,7 +2632,6 @@ function getMockPoolPreview(){
       fromMistakes.forEach(q=>{if(!ids.has(q.id))pool.push(q)});
     }
   }
-  // unique by id
   const seen=new Set();
   pool=pool.filter(q=>{if(seen.has(q.id))return false;seen.add(q.id);return true});
   return pool;
@@ -2630,12 +2639,14 @@ function getMockPoolPreview(){
 function mockBuilderHTML(){
   const allSubs=['Physics','Chemistry','Biology'];
   const bank=db.quizzes||[];
-  const chaptersAvailable=[...new Set(bank.filter(q=>mockBuild.subjects.map(s=>s.toLowerCase()).includes(String(q.subject||'').toLowerCase())).map(q=>q.chapter).filter(Boolean))].sort();
+  const chaptersAvailable=[...new Set(bank.filter(q=>mockBuild.subjects.map(s=>s.toLowerCase()).includes(String(q.subject||'').toLowerCase())).map(q=>String(q.chapter||'').trim()).filter(Boolean))].sort();
   const pool=getMockPoolPreview();
   const n=Math.min(mockBuild.count||45, pool.length);
+  const selectedCh=mockBuild.chapters||[];
+  const chapModeNote=selectedCh.length?`<span class="tag green">${selectedCh.length} chapter selected</span>`:`<span class="tag gold">All chapters (tap to pick specific)</span>`;
   return `<div class="card" style="margin-bottom:16px">
     <div class="section-head" style="margin-top:0"><h3>🎯 Build Mock from Question Bank</h3><small>SUBJECT → CHAPTER → SOURCE</small></div>
-    <p class="muted" style="font-size:12px;line-height:1.6;margin-bottom:12px">Imported MCQs + open Mistake Hunter se paper banao. Subject → chapters → source select karke start.</p>
+    <p class="muted" style="font-size:12px;line-height:1.6;margin-bottom:12px">Subject choose karo → chapters tap karke select/deselect → source → Start. Single chapter bhi select ho sakta hai.</p>
     <div class="field"><label>1. SUBJECTS</label>
       <div class="actions" style="flex-wrap:wrap;gap:8px">
         ${allSubs.map(s=>{
@@ -2644,13 +2655,14 @@ function mockBuilderHTML(){
         }).join('')}
       </div>
     </div>
-    <div class="field"><label>2. CHAPTERS <span class="muted">(empty = all chapters of selected subjects)</span></label>
-      ${chaptersAvailable.length?`<div class="actions" style="flex-wrap:wrap;gap:6px;max-height:140px;overflow:auto">
-        <button type="button" class="btn ghost" style="padding:4px 8px;font-size:11px" onclick="mockSelectAllChapters()">All chapters</button>
-        <button type="button" class="btn ghost" style="padding:4px 8px;font-size:11px" onclick="mockClearChapters()">Clear</button>
+    <div class="field"><label>2. CHAPTERS ${chapModeNote}</label>
+      ${chaptersAvailable.length?`<div class="actions" style="flex-wrap:wrap;gap:6px;max-height:160px;overflow:auto">
+        <button type="button" class="btn ghost" style="padding:4px 8px;font-size:11px" onclick="mockSelectAllChapters()">Select all</button>
+        <button type="button" class="btn ghost" style="padding:4px 8px;font-size:11px" onclick="mockClearChapters()">Clear (use all)</button>
         ${chaptersAvailable.map(ch=>{
-          const on=mockBuild.chapters.includes(ch);
-          return `<button type="button" class="btn ${on?'':'ghost'}" style="padding:4px 9px;font-size:11px" onclick="toggleMockChapter(${JSON.stringify(ch)})">${on?'✓ ':''}${esc(ch)}</button>`;
+          const on=selectedCh.includes(ch);
+          const cnt=bank.filter(q=>String(q.chapter||'').trim()===ch && mockBuild.subjects.map(s=>s.toLowerCase()).includes(String(q.subject||'').toLowerCase())).length;
+          return `<button type="button" class="btn ${on?'':'ghost'}" style="padding:4px 9px;font-size:11px;${on?'border-color:#22c55e;background:#103827;color:#dcfce7':''}" onclick="toggleMockChapter(this.dataset.ch)" data-ch="${esc(ch)}">${on?'✓ ':''}${esc(ch)} <b style="opacity:.7">${cnt}</b></button>`;
         }).join('')}
       </div>`:'<div class="empty">Is subject ke liye bank me chapter nahi — pehle Practice me MCQ import karo.</div>'}
     </div>
@@ -2685,13 +2697,17 @@ window.toggleMockSubject=s=>{
   render();
 };
 window.toggleMockChapter=ch=>{
+  ch=String(ch||'').trim();
+  if(!ch)return;
+  mockBuild.chapters=mockBuild.chapters||[];
   const i=mockBuild.chapters.indexOf(ch);
-  if(i>=0)mockBuild.chapters.splice(i,1);else mockBuild.chapters.push(ch);
+  if(i>=0)mockBuild.chapters.splice(i,1);
+  else mockBuild.chapters.push(ch);
   render();
 };
 window.mockSelectAllChapters=()=>{
   const bank=db.quizzes||[];
-  mockBuild.chapters=[...new Set(bank.filter(q=>mockBuild.subjects.map(s=>s.toLowerCase()).includes(String(q.subject||'').toLowerCase())).map(q=>q.chapter).filter(Boolean))];
+  mockBuild.chapters=[...new Set(bank.filter(q=>mockBuild.subjects.map(s=>s.toLowerCase()).includes(String(q.subject||'').toLowerCase())).map(q=>String(q.chapter||'').trim()).filter(Boolean))];
   render();
 };
 window.mockClearChapters=()=>{mockBuild.chapters=[];render()};
@@ -2756,6 +2772,78 @@ function streakLabel(){
 function updateStreakBadge(){
   const el=document.getElementById('streakBadge');
   if(el)el.textContent=streakLabel();
+}
+function dailyGoalsHTML(){
+  db.settings=db.settings||{};
+  const g=db.settings.dailyGoals||{mins:120,qs:40,missions:3};
+  const mins=totalMinutes(), qs=totalQuestionsToday();
+  const tasks=todayTasks(), done=tasks.filter(t=>t.done).length;
+  const pct=(a,b)=>b?Math.min(100,Math.round(a/b*100)):0;
+  const row=(label,cur,tgt,col)=>(
+    `<div style="flex:1;min-width:120px">
+      <div class="progress-meta"><span>${label}</span><span>${cur}/${tgt}</span></div>
+      <div class="bar"><span style="width:${pct(cur,tgt)}%;background:${col}"></span></div>
+    </div>`
+  );
+  return `<div class="card" style="margin-bottom:14px">
+    <div class="section-head" style="margin-top:0"><h3>🎯 Daily Goals</h3>
+      <button type="button" class="btn ghost" style="padding:4px 8px;font-size:10px" onclick="editDailyGoals()">Edit</button>
+    </div>
+    <div class="actions" style="gap:14px;flex-wrap:wrap;align-items:stretch">
+      ${row('Focus min',mins,g.mins||120,'#e33b4b')}
+      ${row('Questions',qs,g.qs||40,'#3b82f6')}
+      ${row('Missions',done,g.missions||Math.max(tasks.length,1),'#22c55e')}
+    </div>
+  </div>`;
+}
+window.editDailyGoals=()=>{
+  db.settings=db.settings||{};
+  const g=db.settings.dailyGoals||{mins:120,qs:40,missions:3};
+  const mins=parseInt(prompt('Daily focus minutes target?',g.mins),10);
+  const qs=parseInt(prompt('Daily questions target?',g.qs),10);
+  const missions=parseInt(prompt('Daily missions target?',g.missions),10);
+  if([mins,qs,missions].some(x=>Number.isNaN(x)||x<0)){toast('Invalid goals');return}
+  db.settings.dailyGoals={mins,qs,missions};
+  save();render();toast('Daily goals updated');
+};
+function streakStripHTML(){
+  const keys=[];
+  for(let i=6;i>=0;i--){
+    const d=new Date();d.setDate(d.getDate()-i);
+    keys.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'));
+  }
+  db.streakDays=db.streakDays||{};
+  // lock today's status if qualifies
+  streak();
+  const cells=keys.map(k=>{
+    const ok=!!db.streakDays[k]||dayQualifiesLive(k);
+    const lab=new Date(k+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short'});
+    return `<div style="text-align:center;flex:1">
+      <div style="width:28px;height:28px;margin:0 auto;border-radius:8px;display:grid;place-items:center;font-size:12px;background:${ok?'#103827':'#1a1a24'};border:1px solid ${ok?'#22c55e':'#333'}">${ok?'🔥':'·'}</div>
+      <div class="muted" style="font-size:9px;margin-top:4px">${lab}</div>
+    </div>`;
+  }).join('');
+  return `<div class="card" style="margin-bottom:14px">
+    <div class="section-head" style="margin-top:0"><h3>🔥 7-day streak</h3><small>${streakLabel()} • 6h focus OR 60% missions</small></div>
+    <div class="actions" style="justify-content:space-between">${cells}</div>
+  </div>`;
+}
+function revisionQueueHTML(){
+  let due=[];
+  try{due=typeof dueRevisionsList==='function'?dueRevisionsList().slice(0,6):[]}catch(_){due=[]}
+  if(!due.length){
+    // fallback: analysis ticks incomplete high pyq or weak chapters
+    const weak=[];
+    for(const s of ['Physics','Chemistry','Biology']){
+      (db.chapters[s]||[]).filter(c=>c.strength==='Weak'||c.strength==='weak').slice(0,2).forEach(c=>weak.push({subject:s,chapter:c.name,reason:'Marked weak'}));
+    }
+    if(!weak.length)return '';
+    due=weak;
+  }
+  return `<div class="card" style="margin-bottom:14px">
+    <div class="section-head" style="margin-top:0"><h3>📚 Revision queue</h3><small>SPACED + WEAK</small></div>
+    ${due.map(r=>`<div class="list-item"><div><b>${esc(r.chapter||r.name||'')}</b><div class="muted">${esc(r.subject||'')} ${r.reason?('• '+esc(r.reason)):''}</div></div><button type="button" class="btn secondary" style="padding:4px 8px;font-size:10px" onclick="navigate('revision')">Open</button></div>`).join('')}
+  </div>`;
 }
 
 const WHY_FIX={
