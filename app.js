@@ -247,6 +247,33 @@ window.toggleZenMode=force=>{
 const zenBtn=document.getElementById('zenBtn');
 if(zenBtn)zenBtn.onclick=()=>toggleZenMode();
 
+const TIMER_WALLS=[
+  {id:'soft',label:'🌸 Soft blush'},
+  {id:'mint',label:'🌿 Mint calm'},
+  {id:'dusk',label:'🌙 Night study'},
+  {id:'peach',label:'🍑 Warm peach'},
+  {id:'sky',label:'☁️ Soft sky'},
+  {id:'plain',label:'⬜ Clean'}
+];
+function applyTimerWallpaper(el){
+  if(!el)return;
+  const id=(db.settings&&db.settings.timerWall)||'soft';
+  TIMER_WALLS.forEach(w=>el.classList.remove('wall-'+w.id));
+  el.classList.add('wall-'+(TIMER_WALLS.some(w=>w.id===id)?id:'soft'));
+}
+window.setTimerWallpaper=id=>{
+  db.settings=db.settings||{};
+  db.settings.timerWall=id;
+  save();
+  const el=document.getElementById('timerFull');
+  applyTimerWallpaper(el);
+  const bar=document.getElementById('tfWallBar');
+  if(bar){
+    bar.querySelectorAll('[data-wall]').forEach(b=>{
+      b.classList.toggle('active',b.getAttribute('data-wall')===id);
+    });
+  }
+};
 function ensureTimerFullEl(){
   let el=document.getElementById('timerFull');
   if(el)return el;
@@ -254,12 +281,15 @@ function ensureTimerFullEl(){
   el.id='timerFull';
   el.className='timer-full';
   el.hidden=true;
+  const wallId=(db.settings&&db.settings.timerWall)||'soft';
   el.innerHTML=`<button type="button" class="icon-btn tf-close" aria-label="Close" onclick="toggleTimerFullscreen(false)">×</button>
+  <div class="tf-wall-bar" id="tfWallBar">${TIMER_WALLS.map(w=>`<button type="button" class="tf-wall-chip ${w.id===wallId?'active':''}" data-wall="${w.id}" onclick="setTimerWallpaper('${w.id}')">${w.label}</button>`).join('')}</div>
   <div class="tf-label" id="tfLabel"></div>
   <div class="tf-time" id="tfTime">00:00:00</div>
   <div class="tf-state" id="tfState"></div>
   <div class="actions" style="justify-content:center;margin-top:30px"><button type="button" class="btn" id="tfToggle">Start focus</button><button type="button" class="btn secondary" id="tfReset">Reset</button></div>`;
   document.body.appendChild(el);
+  applyTimerWallpaper(el);
   el.querySelector('#tfToggle').onclick=()=>startTimer();
   el.querySelector('#tfReset').onclick=()=>resetCurrentTimer();
   return el;
@@ -267,6 +297,7 @@ function ensureTimerFullEl(){
 function updateTimerFullDOM(){
   const el=document.getElementById('timerFull');
   if(!el||el.hidden)return;
+  applyTimerWallpaper(el);
   const {h,m,s}=timerParts(timerSeconds);
   document.getElementById('tfTime').textContent=`${h}:${m}:${s}`;
   document.getElementById('tfToggle').textContent=timerRunning?'Pause':'Start focus';

@@ -116,12 +116,50 @@ textarea{min-height:75px;resize:vertical}
 .timer-state{font:10px 'DM Mono';letter-spacing:2px;color:#d77a85}
 .custom-time-row{display:flex;gap:8px;justify-content:center;max-width:240px;margin:14px auto 0}
 
-.timer-full{position:fixed;inset:0;z-index:100;background:#06060a;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center}
+.timer-full{position:fixed;inset:0;z-index:100;background:#06060a;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center;overflow:hidden}
 .timer-full[hidden]{display:none}
-.tf-close{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));right:16px;font-size:20px}
-.tf-time{font:700 clamp(54px,17vw,200px) 'DM Mono',monospace;color:#fff;font-variant-numeric:tabular-nums;line-height:1;letter-spacing:2px;text-shadow:0 0 40px #e33b4b55}
-.tf-state{font:11px 'DM Mono';letter-spacing:3px;color:#d77a85;margin-top:22px}
-.tf-label{font:11px 'DM Mono';letter-spacing:2px;color:var(--gold);margin-bottom:18px;max-width:90%}
+.tf-close{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));right:16px;font-size:20px;z-index:2}
+.tf-time{font:700 clamp(54px,17vw,200px) 'DM Mono',monospace;color:#fff;font-variant-numeric:tabular-nums;line-height:1;letter-spacing:2px;text-shadow:0 0 40px #e33b4b55;position:relative;z-index:1}
+.tf-state{font:11px 'DM Mono';letter-spacing:3px;color:#d77a85;margin-top:22px;position:relative;z-index:1}
+.tf-label{font:11px 'DM Mono';letter-spacing:2px;color:var(--gold);margin-bottom:18px;max-width:90%;position:relative;z-index:1}
+.tf-wall-bar{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));left:16px;right:56px;display:flex;flex-wrap:wrap;gap:6px;z-index:2;justify-content:flex-start}
+.tf-wall-chip{border:1px solid rgba(255,255,255,.25);background:rgba(0,0,0,.28);color:#fff;font:10px Manrope;padding:5px 9px;border-radius:999px;cursor:pointer;backdrop-filter:blur(8px)}
+.tf-wall-chip.active{background:rgba(227,59,75,.85);border-color:transparent}
+.timer-full .actions{position:relative;z-index:1}
+.timer-full.wall-soft{background:radial-gradient(ellipse 80% 60% at 20% 20%,#ffd6e8 0%,transparent 55%),radial-gradient(ellipse 70% 50% at 85% 15%,#d4e4ff 0%,transparent 50%),radial-gradient(ellipse 60% 45% at 70% 85%,#ffe8c8 0%,transparent 50%),linear-gradient(160deg,#fff5f8 0%,#f0f4ff 50%,#fff8f0 100%)}
+.timer-full.wall-soft .tf-time{color:#2a2430;text-shadow:0 4px 30px #e33b4b22}
+.timer-full.wall-soft .tf-state{color:#b04a5c}
+.timer-full.wall-soft .tf-label{color:#8a6b1f}
+.timer-full.wall-soft .tf-wall-chip{background:rgba(255,255,255,.55);color:#333;border-color:rgba(0,0,0,.08)}
+.timer-full.wall-soft .tf-wall-chip.active{background:#e33b4b;color:#fff}
+.timer-full.wall-mint{background:radial-gradient(ellipse 75% 55% at 15% 25%,#c8f5e4 0%,transparent 55%),radial-gradient(ellipse 65% 50% at 90% 20%,#d4f0ff 0%,transparent 50%),radial-gradient(ellipse 55% 40% at 60% 90%,#e8ffd4 0%,transparent 50%),linear-gradient(165deg,#f2fffb 0%,#eef8ff 55%,#f7fff0 100%)}
+.timer-full.wall-mint .tf-time{color:#1a2e28;text-shadow:0 4px 28px #2a9d7622}
+.timer-full.wall-mint .tf-state{color:#2a7a62}
+.timer-full.wall-mint .tf-label{color:#5a7a30}
+.timer-full.wall-mint .tf-wall-chip{background:rgba(255,255,255,.55);color:#243;border-color:rgba(0,0,0,.08)}
+.timer-full.wall-mint .tf-wall-chip.active{background:#2a9d76;color:#fff}
+.timer-full.wall-dusk{background:radial-gradient(ellipse 70% 50% at 20% 30%,#3d2a5c 0%,transparent 55%),radial-gradient(ellipse 60% 45% at 85% 20%,#1a3a5c 0%,transparent 50%),radial-gradient(ellipse 50% 40% at 50% 90%,#4a1f3a 0%,transparent 50%),linear-gradient(160deg,#120e1a 0%,#1a1528 50%,#0e1520 100%)}
+.timer-full.wall-dusk .tf-time{color:#f5eef8;text-shadow:0 0 40px #c084fc55}
+.timer-full.wall-dusk .tf-state{color:#e9a0c0}
+.timer-full.wall-dusk .tf-label{color:#e8c86a}
+.timer-full.wall-peach{background:radial-gradient(ellipse 80% 55% at 25% 15%,#ffd4b8 0%,transparent 55%),radial-gradient(ellipse 65% 50% at 90% 30%,#ffc9d9 0%,transparent 50%),radial-gradient(ellipse 55% 40% at 40% 90%,#ffe6a8 0%,transparent 50%),linear-gradient(155deg,#fff6ef 0%,#ffe8e0 50%,#fff5e6 100%)}
+.timer-full.wall-peach .tf-time{color:#3a2418;text-shadow:0 4px 28px #e07a4522}
+.timer-full.wall-peach .tf-state{color:#c45c3a}
+.timer-full.wall-peach .tf-label{color:#9a6b20}
+.timer-full.wall-peach .tf-wall-chip{background:rgba(255,255,255,.55);color:#432;border-color:rgba(0,0,0,.08)}
+.timer-full.wall-peach .tf-wall-chip.active{background:#e07a45;color:#fff}
+.timer-full.wall-sky{background:radial-gradient(ellipse 80% 50% at 30% 20%,#c9e4ff 0%,transparent 55%),radial-gradient(ellipse 70% 45% at 80% 25%,#e0d4ff 0%,transparent 50%),radial-gradient(ellipse 60% 40% at 50% 85%,#d4f5ff 0%,transparent 50%),linear-gradient(170deg,#f0f7ff 0%,#eef2ff 45%,#f5fbff 100%)}
+.timer-full.wall-sky .tf-time{color:#1e2a3a;text-shadow:0 4px 28px #4a7cff22}
+.timer-full.wall-sky .tf-state{color:#4a6fa5}
+.timer-full.wall-sky .tf-label{color:#6b5a9a}
+.timer-full.wall-sky .tf-wall-chip{background:rgba(255,255,255,.55);color:#234;border-color:rgba(0,0,0,.08)}
+.timer-full.wall-sky .tf-wall-chip.active{background:#4a7cff;color:#fff}
+.timer-full.wall-plain{background:#f8f9fb}
+.timer-full.wall-plain .tf-time{color:#20232b;text-shadow:none}
+.timer-full.wall-plain .tf-state{color:#a52b3a}
+.timer-full.wall-plain .tf-label{color:#94701e}
+.timer-full.wall-plain .tf-wall-chip{background:rgba(0,0,0,.06);color:#333;border-color:rgba(0,0,0,.08)}
+.timer-full.wall-plain .tf-wall-chip.active{background:#e33b4b;color:#fff}
 body.timer-full-open{overflow:hidden}
 .modal-overlay{position:fixed;inset:0;background:rgba(6,6,10,.96);z-index:50;display:none;align-items:center;justify-content:center;padding:20px}
 .modal-overlay.open{display:flex}
@@ -307,10 +345,11 @@ input:focus,select:focus,textarea:focus{border-color:#c94a58;box-shadow:0 0 0 3p
 .cd-note{color:#59616e}
 .cd-note b{color:#9a711c}
 .timer-state{color:#a52b3a}
-.timer-full{background:#f8f9fb;color:#20232b}
-.tf-time{color:#20232b;text-shadow:0 0 32px #c9273818}
-.tf-state{color:#a52b3a}
-.tf-label{color:#94701e}
+/* timer-full wallpaper handled by .wall-* classes — don't force flat bg here */
+.timer-full.wall-plain{background:#f8f9fb;color:#20232b}
+.timer-full.wall-plain .tf-time{color:#20232b;text-shadow:0 0 32px #c9273818}
+.timer-full.wall-plain .tf-state{color:#a52b3a}
+.timer-full.wall-plain .tf-label{color:#94701e}
 .modal-overlay{background:rgba(31,35,44,.48)}
 .modal-card{background:#fff;border-color:var(--line);box-shadow:0 20px 60px #20232b20}
 .opt-btn{background:#fff;border-color:#dfe2e8;color:#343a45}
