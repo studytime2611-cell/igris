@@ -35,6 +35,9 @@ let vaultChapterFilter='All', mistakeOpenGroups=new Set(), vaultOpenGroups=new S
 let mockLabFix=8, mockLabFocusId=null;
 let skipDrill=false, drillNet=0, drillForced=0, drillRight=0, drillWrong=0, drillSkip=0;
 let mockBuild={step:'subject', subjects:['Physics','Chemistry','Biology'], chapters:[], source:'both', count:45};
+let quizReview=new Set(); // question ids marked for review in active quiz
+let mistakeTypeFilter='All';
+let mistakeSubjectFilter='All';
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -1297,6 +1300,7 @@ function beginQuizSession(items,meta,key=null,args=null){
   quizPickedIdx=null;
   quizWrongList=[];
   quizAnswers={};
+  quizReview=new Set();
   quizElapsedSec=0;
   skipDrill=!!(meta&&meta.skipDrill);
   drillNet=0;drillForced=0;drillRight=0;drillWrong=0;drillSkip=0;
@@ -1305,9 +1309,15 @@ function beginQuizSession(items,meta,key=null,args=null){
 }
 function restoreQuizAnswerState(idx){
   const saved=quizAnswers[idx];
-  if(saved){
+  if(saved && saved.picked!==-1 && !saved.skipped){
+    // previously answered — lock and show pick
     quizAnswered=true;
     quizPickedIdx=saved.picked;
+  }else if(saved && (saved.skipped || saved.picked===-1)){
+    // skipped earlier — allow re-attempt, don't show answer
+    quizAnswered=false;
+    quizPickedIdx=null;
+    // clear skip so a new answer can replace it
   }else{
     quizAnswered=false;
     quizPickedIdx=null;
@@ -1670,22 +1680,29 @@ window.answerQuizOpt=(choiceIdx)=>{
 };
 window.skipQuizQuestion=()=>{
   if(quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
-  quizAnswered=true;
-  quizPickedIdx=-1;
-  quizAnswers[quizIdx]={picked:-1,correct:false};
+  // Mark skipped — do NOT reveal answer; jump to next Q
+  quizAnswers[quizIdx]={picked:-1,correct:false,skipped:true};
   if(skipDrill){
     drillSkip++;
     drillForced-=1;
   }
   recomputeQuizScore();
-  if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();else saveQuizProgress();
+  if(quizIdx+1>=activeQuiz.length){
+    quizIdx=activeQuiz.length;
+    saveQuizAttemptIfDone();
+    render();
+    return;
+  }
+  quizIdx++;
+  restoreQuizAnswerState(quizIdx);
+  saveQuizProgress();
   render();
 };
 
 window.nextQuizQuestion=()=>{
   if(!activeQuiz)return;
   if(quizIdx+1>=activeQuiz.length){
-    if(!quizAnswered){toast('Answer or Skip before finishing.');return}
+    if(!quizAnswered && !quizAnswers[quizIdx]){toast('Answer or Skip before finishing.');return}
     quizIdx=activeQuiz.length;
     recomputeQuizScore();
     saveQuizAttemptIfDone();
@@ -1703,6 +1720,20 @@ window.prevQuizQuestion=()=>{
   restoreQuizAnswerState(quizIdx);
   saveQuizProgress();
   render();
+};
+window.toggleQuizReview=()=>{
+  if(!activeQuiz||!activeQuiz[quizIdx])return;
+  const id=activeQuiz[quizIdx].id||('idx-'+quizIdx);
+  if(quizReview.has(id))quizReview.delete(id);else quizReview.add(id);
+  // persist review marks on questions in db if they have real ids
+  const q=activeQuiz[quizIdx];
+  if(q&&q.id){
+    const bank=db.quizzes||[];
+    const found=bank.find(x=>x.id===q.id);
+    if(found){found.review=quizReview.has(id);save()}
+  }
+  render();
+  toast(quizReview.has(id)?'Marked for review 🚩':'Review mark removed');
 };
 
 window.deleteAttempt=(id)=>{
@@ -1838,11 +1869,19 @@ function practiceView(){
               }
               return `<button type="button" class="${cls}" style="${extraStyle}" ${quizAnswered?'disabled':''} onclick="answerQuizOpt(${i})"><b>${String.fromCharCode(65+i)}.</b> <span>${esc(opt)}</span>${quizAnswered && i===q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#86efac">✓ TRUE ANSWER</span>' : quizAnswered && i===quizPickedIdx && i!==q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#fca5a5">✕ WRONG</span>' : ''}</button>`;
             }).join('')}
-            ${!quizAnswered?`<div class="actions" style="margin-top:10px;flex-wrap:wrap">
-              <button type="button" class="btn secondary" onclick="skipQuizQuestion()">⏭ Skip</button>
-              ${skipDrill?`<span class="muted" style="font-size:11px">Net ${drillNet} • R${drillRight} W${drillWrong} S${drillSkip}</span>`:''}
-            </div>`:''}
-            ${quizAnswered?`<div class="ai-reply-box" style="${quizPickedIdx!==q.ans&&quizPickedIdx!==-1?'border-color:#ef4444':''}"><b>${quizPickedIdx===-1?'Skipped. ':''}True Answer: ${String.fromCharCode(65+q.ans)}. ${esc(q.opts[q.ans])}</b> • Tag: <b>${esc(curMark)}</b>\n${esc(q.exp||'Review this concept before moving on.')}</div>
+            ${(()=>{
+              const qid=q.id||('idx-'+quizIdx);
+              const isReview=quizReview.has(qid);
+              const isSkipped=quizAnswered&&quizPickedIdx===-1;
+              const didPick=quizAnswered&&quizPickedIdx!==-1&&quizPickedIdx!==null;
+              return `
+            <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+              ${!quizAnswered?`<button type="button" class="btn secondary" onclick="skipQuizQuestion()">⏭ Skip</button>`:''}
+              <button type="button" class="btn ${isReview?'':'ghost'}" style="padding:6px 10px;${isReview?'background:#7c4a10;border-color:#f59e0b;color:#fde68a':''}" onclick="toggleQuizReview()">${isReview?'🚩 Review':'🚩 Mark for review'}</button>
+              ${skipDrill&&!quizAnswered?`<span class="muted" style="font-size:11px">Net ${drillNet} • R${drillRight} W${drillWrong} S${drillSkip}</span>`:''}
+            </div>
+            ${isSkipped?`<div class="ai-reply-box" style="border-color:#64748b"><b>⏭ Skipped</b> — answer hidden. Previous pe wapas aake attempt kar sakte ho.</div>`:''}
+            ${didPick?`<div class="ai-reply-box" style="${quizPickedIdx!==q.ans?'border-color:#ef4444':''}"><b>True Answer: ${String.fromCharCode(65+q.ans)}. ${esc(q.opts[q.ans])}</b> • Your pick: <b>${String.fromCharCode(65+quizPickedIdx)}</b> • Tag: <b>${esc(curMark)}</b>\n${esc(q.exp||'Review this concept before moving on.')}</div>
             ${whyForQuestionHTML(q)}`:''}
             <div class="actions" style="margin-top:12px;flex-wrap:wrap;justify-content:space-between">
               <button type="button" class="btn secondary" ${quizIdx<=0?'disabled style="opacity:.4"':''} onclick="prevQuizQuestion()">← Previous</button>
@@ -1850,14 +1889,18 @@ function practiceView(){
                 ${!quizAnswered?`<button type="button" class="btn ghost" onclick="skipQuizQuestion()">Skip →</button>`:''}
                 ${quizAnswered?`<button type="button" class="btn" onclick="nextQuizQuestion()">${quizIdx+1<activeQuiz.length?'Next Question →':'Finish & Save Attempt'}</button>`:''}
               </div>
-            </div>
+            </div>`;
+            })()}
           </div>`;
         })() : activeQuiz && quizIdx >= activeQuiz.length ? (()=>{
           const lastAtt=attempts[attempts.length-1];
           const avgS=lastAtt&&lastAtt.avgSec?lastAtt.avgSec:Math.max(1,Math.round(quizElapsedSec/Math.max(activeQuiz.length,1)));
+          const skipCount=Object.values(quizAnswers).filter(a=>a&&(a.skipped||a.picked===-1)).length;
+          const revCount=quizReview.size;
           return `<div class="card" style="background:#0c0c12;text-align:center;padding:24px">
             <div class="eyebrow">SAVED UNDER • ${esc(activeQuizMeta.chapter)}</div>
             <div style="font-size:36px;font-weight:800;margin:8px 0">${skipDrill?`${drillNet} net`:`${quizScore} / ${activeQuiz.length}`}</div>
+            <div class="muted" style="font-size:12px;margin-bottom:6px">${skipCount?`⏭ ${skipCount} skipped • `:''}${revCount?`🚩 ${revCount} marked for review`:''}</div>
             <div class="muted" style="font-size:12px">${skipDrill?`Right ${drillRight} • Wrong ${drillWrong} • Skip ${drillSkip} • Forced-guess baseline ~${drillForced} (assumes skips would be wrong)`:`Accuracy: ${Math.round(quizScore/activeQuiz.length*100)}%`} • Time: ${fmtMMSS(quizElapsedSec)} (${avgS}s/Q)</div>
             ${skipDrill&&drillNet>drillForced?`<p style="color:#86efac;font-size:12px;margin-top:8px">Skipping saved ~${drillNet-drillForced} marks vs guessing every doubtful Q wrong.</p>`:''}
             <div class="actions" style="justify-content:center;margin-top:16px">
@@ -2152,9 +2195,42 @@ function mistakeGroupsHTML(ml){
 
 function mistakes(){
   title('Mistake Hunter');
-  const mo=db.mistakes.filter(x=>!x.closed),mc=db.mistakes.filter(x=>x.closed),ml=mistakeTab==='open'?mo:mc;
+  const TYPE_LIST=['All','Calculation','Silly mistake','Concept gap','Lack of revision','Not reading properly','Formula recall','Misread question','Memory / NCERT','Time management','Untagged','Other'];
+  const SUB_LIST=['All','Physics','Chemistry','Biology'];
+  const mo=db.mistakes.filter(x=>!x.closed),mc=db.mistakes.filter(x=>x.closed);
+  let ml=mistakeTab==='open'?mo:mc;
+  if(mistakeSubjectFilter!=='All')ml=ml.filter(m=>String(m.subject||'')===mistakeSubjectFilter);
+  if(mistakeTypeFilter!=='All'){
+    ml=ml.filter(m=>{
+      const t=m.type||'Untagged';
+      if(mistakeTypeFilter==='Untagged')return !m.type||m.type==='Untagged';
+      return t===mistakeTypeFilter;
+    });
+  }
+  const typeCounts={};
+  (mistakeTab==='open'?mo:mc).forEach(m=>{
+    const t=m.type||'Untagged';
+    typeCounts[t]=(typeCounts[t]||0)+1;
+  });
   const initChapters=getChaptersForSubject('Physics');
+  const reviewQs=(db.quizzes||[]).filter(q=>q.review);
   return `<div class="section-head"><h2>Turn errors into insight</h2><small>${db.mistakes.length} RECORDS</small></div>
+  <div class="card" style="margin-bottom:14px">
+    <div class="section-head" style="margin-top:0"><h3>Filter by type / subject</h3><small>CALCULATION • CONCEPT • …</small></div>
+    <div class="actions" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
+      ${SUB_LIST.map(s=>`<button type="button" class="btn ${mistakeSubjectFilter===s?'':'ghost'}" style="padding:5px 10px;font-size:11px" onclick="setMistakeSubjectFilter('${s}')">${s}${s==='All'?'':''}</button>`).join('')}
+    </div>
+    <div class="actions" style="flex-wrap:wrap;gap:6px">
+      ${TYPE_LIST.map(t=>{
+        const c=t==='All'?(mistakeTab==='open'?mo:mc).length:(typeCounts[t]||0);
+        return `<button type="button" class="btn ${mistakeTypeFilter===t?'':'ghost'}" style="padding:5px 10px;font-size:11px" onclick="setMistakeTypeFilter(${JSON.stringify(t)})">${t} <b>${c}</b></button>`;
+      }).join('')}
+    </div>
+    <div class="actions" style="margin-top:12px;flex-wrap:wrap">
+      <button type="button" class="btn" ${ml.length?'':'disabled style="opacity:.5"'} onclick="startMistakeTypeQuiz()">Practice filtered mistakes (${ml.length})</button>
+      ${reviewQs.length?`<button type="button" class="btn secondary" onclick="startReviewMarkedQuiz()">🚩 Review marked Qs (${reviewQs.length})</button>`:''}
+    </div>
+  </div>
   <div class="two-col">
     <div class="card">
       <h3>Record a mistake</h3>
@@ -2177,12 +2253,54 @@ function mistakes(){
       </form>
     </div>
     <div class="card">
-      <h3>Learning log</h3>
+      <h3>Learning log ${mistakeTypeFilter!=='All'||mistakeSubjectFilter!=='All'?`<span class="tag blue" style="font-size:10px">${mistakeSubjectFilter!=='All'?mistakeSubjectFilter+' • ':''}${mistakeTypeFilter!=='All'?mistakeTypeFilter:''}</span>`:''}</h3>
       ${tabsHTML(mistakeTab,mo.length,mc.length,'setMistakeTab')}
-      ${ml.length?mistakeGroupsHTML(ml):`<div class="empty">${mistakeTab==='open'?'No open mistakes. Add one after your next practice session.':'Nothing closed yet.'}</div>`}
+      ${ml.length?mistakeGroupsHTML(ml):`<div class="empty">${mistakeTab==='open'?'No open mistakes for this filter.':'Nothing closed yet for this filter.'}</div>`}
     </div>
   </div>`;
 }
+window.setMistakeTypeFilter=t=>{mistakeTypeFilter=t;render()};
+window.setMistakeSubjectFilter=s=>{mistakeSubjectFilter=s;render()};
+window.startMistakeTypeQuiz=()=>{
+  let list=db.mistakes.filter(x=>!x.closed);
+  if(mistakeSubjectFilter!=='All')list=list.filter(m=>String(m.subject||'')===mistakeSubjectFilter);
+  if(mistakeTypeFilter!=='All'){
+    list=list.filter(m=>{
+      const t=m.type||'Untagged';
+      if(mistakeTypeFilter==='Untagged')return !m.type||m.type==='Untagged';
+      return t===mistakeTypeFilter;
+    });
+  }
+  if(!list.length){toast('Is filter pe open mistake nahi hai.');return}
+  const bank=db.quizzes||[];
+  const rebuilt=[];
+  list.forEach(m=>{
+    const matched=bank.find(q=> (m.error||'').includes((q.q||'').slice(0,40)) );
+    if(matched){rebuilt.push({...matched});return}
+    // fallback synthetic card from mistake text
+    rebuilt.push({
+      id:crypto.randomUUID(),
+      subject:m.subject||'Biology',
+      chapter:m.chapter||'Mistake Practice',
+      q: (m.error||'Revise this mistake').replace(/^Wrong MCQ\s*\[[^\]]*\]:\s*/,'').split('|')[0].trim() || 'Revise this concept',
+      opts:['I remember now','Still confused','Need NCERT check','Re-attempt later'],
+      ans:0,
+      mark:'Hard',
+      exp:m.fix||'Fix this error before next mock.',
+      topic:m.type||''
+    });
+  });
+  beginQuizSession(rebuilt,{subject:mistakeSubjectFilter==='All'?'Mixed':mistakeSubjectFilter,chapter:`Mistakes • ${mistakeTypeFilter}`});
+  navigate('practice');
+  toast(`${rebuilt.length} mistake-based Qs started`);
+};
+window.startReviewMarkedQuiz=()=>{
+  const pool=(db.quizzes||[]).filter(q=>q.review);
+  if(!pool.length){toast('Koi question review ke liye marked nahi.');return}
+  beginQuizSession(pool.map(q=>({...q})),{subject:'Mixed',chapter:'🚩 Marked for Review'});
+  navigate('practice');
+  toast(`Review set: ${pool.length} Qs`);
+};
 
 window.deleteMistake=async(id)=>{
   const m=db.mistakes.find(x=>x.id===id);
