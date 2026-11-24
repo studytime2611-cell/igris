@@ -27,12 +27,14 @@ const seed=()=>({
 let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All', selectedQuizSubject=null, analysisTab='Physics';
 let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null, quizClockInterval=null, reminderInterval=null;
 let activeQuiz=null, activeQuizMeta={subject:'All',chapter:'All'}, quizIdx=0, quizScore=0, quizAnswered=false, quizPickedIdx=null, quizWrongList=[], quizElapsedSec=0, retestIdx=0, aiOutput='';
+let quizAnswers={};
 let topBannerHidden=false, activeReminderTaskId=null;
 let timerEndAt=0, timerLabel='', wakeLock=null, ongoingNotifLast=0;
 let timerMissionId=null, missionRanSecs=0, runStartedAt=0, missionSessionId=null, lastMissionFlush=0;
 let vaultChapterFilter='All', mistakeOpenGroups=new Set(), vaultOpenGroups=new Set(), topicOpenGroups=new Set(), activeQuizKey=null, activeQuizArgs=null;
 let mockLabFix=8, mockLabFocusId=null;
 let skipDrill=false, drillNet=0, drillForced=0, drillRight=0, drillWrong=0, drillSkip=0;
+let mockBuild={step:'subject', subjects:['Physics','Chemistry','Biology'], chapters:[], source:'both', count:45};
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -1163,7 +1165,7 @@ function markBadgeStyle(mk){
 window.setPracticeTab=t=>{clearInterval(quizClockInterval);practiceTab=t;render()};
 window.setAttemptChapterFilter=ch=>{attemptChapterFilter=ch;render()};
 window.selectQuizSubject=sub=>{selectedQuizSubject=sub;render()};
-window.exitActiveQuiz=()=>{clearInterval(quizClockInterval);saveQuizProgress();activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;skipDrill=false;render()};
+window.exitActiveQuiz=()=>{clearInterval(quizClockInterval);saveQuizProgress();activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;quizAnswers={};skipDrill=false;render()};
 window.launchChapterBtn=btn=>{
   const sub=btn?.dataset?.sub||'All';
   const chap=btn?.dataset?.chap||'All';
@@ -1267,7 +1269,7 @@ function saveQuizProgress(){
   if(!activeQuizKey||!activeQuiz)return;
   db.quizProgress=db.quizProgress||{};
   if(quizIdx>=activeQuiz.length){delete db.quizProgress[activeQuizKey];save();return}
-  db.quizProgress[activeQuizKey]={ids:activeQuiz.map(q=>q.id),idx:quizIdx,score:quizScore,wrong:quizWrongList,elapsed:quizElapsedSec,answered:quizAnswered,picked:quizPickedIdx,meta:activeQuizMeta,updatedAt:Date.now()};
+  db.quizProgress[activeQuizKey]={ids:activeQuiz.map(q=>q.id),idx:quizIdx,score:quizScore,wrong:quizWrongList,elapsed:quizElapsedSec,answered:quizAnswered,picked:quizPickedIdx,answers:quizAnswers,meta:activeQuizMeta,updatedAt:Date.now()};
   save();
 }
 window.restartActiveQuiz=()=>{
@@ -1294,11 +1296,36 @@ function beginQuizSession(items,meta,key=null,args=null){
   quizAnswered=false;
   quizPickedIdx=null;
   quizWrongList=[];
+  quizAnswers={};
   quizElapsedSec=0;
   skipDrill=!!(meta&&meta.skipDrill);
   drillNet=0;drillForced=0;drillRight=0;drillWrong=0;drillSkip=0;
   practiceTab='quiz';
   render();
+}
+function restoreQuizAnswerState(idx){
+  const saved=quizAnswers[idx];
+  if(saved){
+    quizAnswered=true;
+    quizPickedIdx=saved.picked;
+  }else{
+    quizAnswered=false;
+    quizPickedIdx=null;
+  }
+}
+function recomputeQuizScore(){
+  if(!activeQuiz){quizScore=0;return}
+  let s=0;
+  const wrong=[];
+  for(let i=0;i<activeQuiz.length;i++){
+    const a=quizAnswers[i];
+    if(!a||a.picked===-1)continue;
+    const q=activeQuiz[i];
+    if(a.picked===q.ans)s++;
+    else wrong.push({q:q.q,picked:q.opts[a.picked],correct:q.opts[q.ans],mark:normalizeMark(q.mark||q.tag),exp:q.exp||''});
+  }
+  quizScore=s;
+  quizWrongList=wrong;
 }
 window.startSkipDrill=(n=15)=>{
   const bank=db.quizzes||[];
@@ -1522,7 +1549,10 @@ window.startSavedQuiz=(subFilter='All',chapFilter='All',markFilter='All')=>{
       activeQuizKey=key;
       activeQuizArgs=[subFilter,chapFilter,markFilter];
       quizIdx=prog.idx;quizScore=prog.score||0;quizWrongList=prog.wrong||[];quizElapsedSec=prog.elapsed||0;
-      quizAnswered=!!prog.answered;quizPickedIdx=quizAnswered?prog.picked:null;
+      quizAnswers=prog.answers||{};
+      if(quizAnswers[quizIdx]){quizAnswered=true;quizPickedIdx=quizAnswers[quizIdx].picked}
+      else{quizAnswered=!!prog.answered;quizPickedIdx=quizAnswered?prog.picked:null}
+      skipDrill=!!(activeQuizMeta&&activeQuizMeta.skipDrill);
       practiceTab='quiz';
       render();
       toast(`Resume: Q${quizIdx+1}/${activeQuiz.length}. Naya shuru karna ho to ↺ Restart dabao.`);
@@ -1613,12 +1643,12 @@ window.answerQuizOpt=(choiceIdx)=>{
   const mk=normalizeMark(curQ.mark||curQ.tag);
   const isCorrect=choiceIdx===curQ.ans;
   const trueAnsText=curQ.opts[curQ.ans];
-  if(isCorrect){
-    quizScore++;
-    if(skipDrill){drillNet+=4;drillForced+=4;drillRight++}
-  }else{
-    if(skipDrill){drillNet-=1;drillForced-=1;drillWrong++}
-    quizWrongList.push({q:curQ.q,picked:curQ.opts[choiceIdx],correct:trueAnsText,mark:mk,exp:curQ.exp||''});
+  quizAnswers[quizIdx]={picked:choiceIdx,correct:isCorrect};
+  if(skipDrill){
+    if(isCorrect){drillNet+=4;drillForced+=4;drillRight++}
+    else{drillNet-=1;drillForced-=1;drillWrong++}
+  }
+  if(!isCorrect){
     const exists=db.mistakes.some(m=>!m.closed && m.error.includes(curQ.q.slice(0,45)));
     if(!exists){
       db.mistakes.push({
@@ -1634,24 +1664,43 @@ window.answerQuizOpt=(choiceIdx)=>{
       toast('Saved to Mistake Hunter with True Answer.');
     }
   }
+  recomputeQuizScore();
   if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();else saveQuizProgress();
   render();
 };
 window.skipQuizQuestion=()=>{
-  if(!skipDrill||quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
+  if(quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
   quizAnswered=true;
   quizPickedIdx=-1;
-  drillSkip++;
-  // Forced-attempt baseline assumes a wrong guess (−1) when you wisely skip
-  drillForced-=1;
+  quizAnswers[quizIdx]={picked:-1,correct:false};
+  if(skipDrill){
+    drillSkip++;
+    drillForced-=1;
+  }
+  recomputeQuizScore();
   if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();else saveQuizProgress();
   render();
 };
 
 window.nextQuizQuestion=()=>{
+  if(!activeQuiz)return;
+  if(quizIdx+1>=activeQuiz.length){
+    if(!quizAnswered){toast('Answer or Skip before finishing.');return}
+    quizIdx=activeQuiz.length;
+    recomputeQuizScore();
+    saveQuizAttemptIfDone();
+    render();
+    return;
+  }
   quizIdx++;
-  quizAnswered=false;
-  quizPickedIdx=null;
+  restoreQuizAnswerState(quizIdx);
+  saveQuizProgress();
+  render();
+};
+window.prevQuizQuestion=()=>{
+  if(!activeQuiz||quizIdx<=0)return;
+  quizIdx--;
+  restoreQuizAnswerState(quizIdx);
   saveQuizProgress();
   render();
 };
@@ -1789,10 +1838,19 @@ function practiceView(){
               }
               return `<button type="button" class="${cls}" style="${extraStyle}" ${quizAnswered?'disabled':''} onclick="answerQuizOpt(${i})"><b>${String.fromCharCode(65+i)}.</b> <span>${esc(opt)}</span>${quizAnswered && i===q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#86efac">✓ TRUE ANSWER</span>' : quizAnswered && i===quizPickedIdx && i!==q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#fca5a5">✕ WRONG</span>' : ''}</button>`;
             }).join('')}
-            ${!quizAnswered&&skipDrill?`<div class="actions" style="margin-top:10px"><button type="button" class="btn secondary" onclick="skipQuizQuestion()">⏭ Skip (0 marks)</button><span class="muted" style="font-size:11px">Net ${drillNet} • R${drillRight} W${drillWrong} S${drillSkip}</span></div>`:''}
+            ${!quizAnswered?`<div class="actions" style="margin-top:10px;flex-wrap:wrap">
+              <button type="button" class="btn secondary" onclick="skipQuizQuestion()">⏭ Skip</button>
+              ${skipDrill?`<span class="muted" style="font-size:11px">Net ${drillNet} • R${drillRight} W${drillWrong} S${drillSkip}</span>`:''}
+            </div>`:''}
             ${quizAnswered?`<div class="ai-reply-box" style="${quizPickedIdx!==q.ans&&quizPickedIdx!==-1?'border-color:#ef4444':''}"><b>${quizPickedIdx===-1?'Skipped. ':''}True Answer: ${String.fromCharCode(65+q.ans)}. ${esc(q.opts[q.ans])}</b> • Tag: <b>${esc(curMark)}</b>\n${esc(q.exp||'Review this concept before moving on.')}</div>
-            ${whyForQuestionHTML(q)}
-            <div class="actions" style="margin-top:12px"><button type="button" class="btn" onclick="nextQuizQuestion()">${quizIdx+1<activeQuiz.length?'Next Question →':'Finish & Save Attempt'}</button></div>`:''}
+            ${whyForQuestionHTML(q)}`:''}
+            <div class="actions" style="margin-top:12px;flex-wrap:wrap;justify-content:space-between">
+              <button type="button" class="btn secondary" ${quizIdx<=0?'disabled style="opacity:.4"':''} onclick="prevQuizQuestion()">← Previous</button>
+              <div class="actions" style="gap:8px">
+                ${!quizAnswered?`<button type="button" class="btn ghost" onclick="skipQuizQuestion()">Skip →</button>`:''}
+                ${quizAnswered?`<button type="button" class="btn" onclick="nextQuizQuestion()">${quizIdx+1<activeQuiz.length?'Next Question →':'Finish & Save Attempt'}</button>`:''}
+              </div>
+            </div>
           </div>`;
         })() : activeQuiz && quizIdx >= activeQuiz.length ? (()=>{
           const lastAtt=attempts[attempts.length-1];
@@ -2387,10 +2445,124 @@ window.removeTest=async id=>{
   save();render();toast('Record removed.');
 };
 
+function getMockPoolPreview(){
+  const bank=db.quizzes||[];
+  const openMistakes=db.mistakes.filter(m=>!m.closed);
+  const subSet=new Set((mockBuild.subjects||[]).map(s=>s.toLowerCase()));
+  const chapSet=new Set(mockBuild.chapters||[]);
+  const matchChap=q=>{
+    if(!chapSet.size)return true;
+    return chapSet.has(q.chapter);
+  };
+  const matchSub=q=>subSet.has(String(q.subject||'').trim().toLowerCase());
+  let pool=[];
+  if(mockBuild.source==='bank'||mockBuild.source==='both'){
+    pool.push(...bank.filter(q=>matchSub(q)&&matchChap(q)));
+  }
+  if(mockBuild.source==='mistakes'||mockBuild.source==='both'){
+    const fromMistakes=bank.filter(q=>{
+      if(!matchSub(q)||!matchChap(q))return false;
+      return openMistakes.some(m=>{
+        const blob=`${m.error||''} ${m.fix||''}`;
+        return blob.includes((q.q||'').slice(0,40));
+      });
+    });
+    if(mockBuild.source==='mistakes')pool=fromMistakes;
+    else{
+      const ids=new Set(pool.map(q=>q.id));
+      fromMistakes.forEach(q=>{if(!ids.has(q.id))pool.push(q)});
+    }
+  }
+  // unique by id
+  const seen=new Set();
+  pool=pool.filter(q=>{if(seen.has(q.id))return false;seen.add(q.id);return true});
+  return pool;
+}
+function mockBuilderHTML(){
+  const allSubs=['Physics','Chemistry','Biology'];
+  const bank=db.quizzes||[];
+  const chaptersAvailable=[...new Set(bank.filter(q=>mockBuild.subjects.map(s=>s.toLowerCase()).includes(String(q.subject||'').toLowerCase())).map(q=>q.chapter).filter(Boolean))].sort();
+  const pool=getMockPoolPreview();
+  const n=Math.min(mockBuild.count||45, pool.length);
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="section-head" style="margin-top:0"><h3>🎯 Build Mock from Question Bank</h3><small>SUBJECT → CHAPTER → SOURCE</small></div>
+    <p class="muted" style="font-size:12px;line-height:1.6;margin-bottom:12px">Imported MCQs + open Mistake Hunter se paper banao. Subject → chapters → source select karke start.</p>
+    <div class="field"><label>1. SUBJECTS</label>
+      <div class="actions" style="flex-wrap:wrap;gap:8px">
+        ${allSubs.map(s=>{
+          const on=mockBuild.subjects.includes(s);
+          return `<button type="button" class="btn ${on?'':'ghost'}" style="padding:6px 12px" onclick="toggleMockSubject('${s}')">${on?'✓ ':''}${s}</button>`;
+        }).join('')}
+      </div>
+    </div>
+    <div class="field"><label>2. CHAPTERS <span class="muted">(empty = all chapters of selected subjects)</span></label>
+      ${chaptersAvailable.length?`<div class="actions" style="flex-wrap:wrap;gap:6px;max-height:140px;overflow:auto">
+        <button type="button" class="btn ghost" style="padding:4px 8px;font-size:11px" onclick="mockSelectAllChapters()">All chapters</button>
+        <button type="button" class="btn ghost" style="padding:4px 8px;font-size:11px" onclick="mockClearChapters()">Clear</button>
+        ${chaptersAvailable.map(ch=>{
+          const on=mockBuild.chapters.includes(ch);
+          return `<button type="button" class="btn ${on?'':'ghost'}" style="padding:4px 9px;font-size:11px" onclick="toggleMockChapter(${JSON.stringify(ch)})">${on?'✓ ':''}${esc(ch)}</button>`;
+        }).join('')}
+      </div>`:'<div class="empty">Is subject ke liye bank me chapter nahi — pehle Practice me MCQ import karo.</div>'}
+    </div>
+    <div class="field"><label>3. QUESTION SOURCE</label>
+      <div class="actions" style="flex-wrap:wrap;gap:8px">
+        ${[['bank','Practice Quiz bank'],['mistakes','Mistake Hunter only'],['both','Bank + Mistakes']].map(([k,lab])=>
+          `<button type="button" class="btn ${mockBuild.source===k?'':'ghost'}" style="padding:6px 12px" onclick="setMockSource('${k}')">${lab}</button>`
+        ).join('')}
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="field"><label>QUESTION COUNT</label>
+        <input type="number" min="5" max="200" value="${mockBuild.count}" onchange="setMockCount(this.value)" style="max-width:120px">
+      </div>
+      <div class="field"><label>AVAILABLE IN POOL</label>
+        <div style="font-size:18px;font-weight:800;padding-top:6px">${pool.length} <span class="muted" style="font-size:12px;font-weight:500">→ will take ${n}</span></div>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:8px">
+      <button type="button" class="btn" ${pool.length<3?'disabled style="opacity:.5"':''} onclick="startCustomMock()">Start Mock (${n} Qs)</button>
+      <button type="button" class="btn secondary" onclick="navigate('practice')">Open Practice Bank</button>
+    </div>
+  </div>`;
+}
+window.toggleMockSubject=s=>{
+  const i=mockBuild.subjects.indexOf(s);
+  if(i>=0)mockBuild.subjects.splice(i,1);else mockBuild.subjects.push(s);
+  mockBuild.chapters=mockBuild.chapters.filter(ch=>{
+    const bank=db.quizzes||[];
+    return bank.some(q=>q.chapter===ch && mockBuild.subjects.map(x=>x.toLowerCase()).includes(String(q.subject||'').toLowerCase()));
+  });
+  render();
+};
+window.toggleMockChapter=ch=>{
+  const i=mockBuild.chapters.indexOf(ch);
+  if(i>=0)mockBuild.chapters.splice(i,1);else mockBuild.chapters.push(ch);
+  render();
+};
+window.mockSelectAllChapters=()=>{
+  const bank=db.quizzes||[];
+  mockBuild.chapters=[...new Set(bank.filter(q=>mockBuild.subjects.map(s=>s.toLowerCase()).includes(String(q.subject||'').toLowerCase())).map(q=>q.chapter).filter(Boolean))];
+  render();
+};
+window.mockClearChapters=()=>{mockBuild.chapters=[];render()};
+window.setMockSource=s=>{mockBuild.source=s;render()};
+window.setMockCount=v=>{mockBuild.count=Math.max(5,Math.min(200,parseInt(v,10)||45));render()};
+window.startCustomMock=()=>{
+  const pool=getMockPoolPreview();
+  if(pool.length<3){toast('Kam se kam 3 questions chahiye. Bank me import karo ya chapters badlo.');return}
+  const n=Math.min(mockBuild.count||45,pool.length);
+  const picked=[...pool].sort(()=>Math.random()-0.5).slice(0,n);
+  const subLabel=mockBuild.subjects.length===3?'Full':mockBuild.subjects.join('+');
+  beginQuizSession(picked,{subject:subLabel,chapter:`Custom Mock • ${subLabel} (${n}Q)`});
+  navigate('practice');
+  toast(`Custom mock started: ${n} questions`);
+};
+
 function tests(){
   title('Mock Tests');
   let avg=db.tests.length?Math.round(db.tests.reduce((a,t)=>a+t.score,0)/db.tests.length):0;
-  return `<div class="stats">${stat('TESTS TAKEN',db.tests.length,'Total recorded')}${stat('AVERAGE SCORE',avg,'Out of 720')}${stat('BEST SCORE',db.tests.length?Math.max(...db.tests.map(t=>t.score)):0,'Out of 720')}${stat('LATEST ACCURACY',db.tests.length?db.tests[db.tests.length-1].accuracy+'%':'—','As entered')}</div>${upcomingTestsHTML()}<div class="two-col"><div class="card"><h3>Record mock test</h3><form id="testForm" oninput="autoCalcMockScore()"><div class="field"><label>TEST NAME</label><input name="name" placeholder="e.g. Full syllabus test 04" required></div><div class="form-grid"><div class="field"><label>SCORE ( / 720 )</label><input name="score" type="number" min="0" max="720" required></div><div class="field"><label>ACCURACY (%)</label><input name="accuracy" type="number" min="0" max="100" placeholder="e.g. 72"></div></div><div class="form-grid"><div class="field"><label>PHYSICS</label><input name="physics" type="number" min="0" max="180" placeholder="Score"></div><div class="field"><label>CHEMISTRY</label><input name="chemistry" type="number" min="0" max="180" placeholder="Score"></div></div><div class="field"><label>BIOLOGY</label><input name="biology" type="number" min="0" max="360" placeholder="Score"></div><div class="field"><label>ATTACH TEST PAPER / ANALYSIS (IMAGE OR PDF, OPTIONAL)</label><input type="file" name="file" accept="image/*,application/pdf"></div><label style="display:flex;align-items:center;gap:8px;font-size:12px;margin:2px 0 14px"><input type="checkbox" name="analysisDone" style="width:auto"> Analysis done ✅</label><button class="btn">Save test</button></form></div><div class="card"><h3>Test history</h3>${db.tests.length?`<div class="table-wrap"><table><thead><tr><th>TEST</th><th>SCORE</th><th>P / C / B</th><th>ACCURACY</th><th>DATE</th><th>ANALYSIS</th><th></th></tr></thead><tbody>${db.tests.slice().reverse().map(t=>{const pcb=(t.physics||t.chemistry||t.biology)?`${t.physics||0} / ${t.chemistry||0} / ${t.biology||0}`:'—';return `<tr><td>${esc(t.name)}</td><td><b>${t.score}</b></td><td><span class="muted">${pcb}</span></td><td>${t.accuracy||'—'}%</td><td>${t.date}</td><td style="white-space:nowrap"><button type="button" class="tag ${t.analysisDone?'green':''}" style="cursor:pointer;${t.analysisDone?'':'background:#4a1019;color:#fca5a5;border-color:#ef4444'}" onclick="toggleTestAnalysis('${t.id}')">${t.analysisDone?'✅ Done':'● Pending'}</button>${t.fileId?` <button type="button" class="icon-btn" style="padding:3px 7px" title="Open file" onclick="previewFile('${t.fileId}')">📎</button>`:''}</td><td><button class="icon-btn" onclick="removeTest('${t.id}')">×</button></td></tr>`}).join('')}</tbody></table></div>${db.tests.slice().reverse().slice(0,3).map(t=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><b style="font-size:11px">${esc(t.name)}</b><p class="muted" style="font-size:10px">${t.analysis?esc(t.analysis):(t.analysisDone?'Analysis done.':'Analysis pending.')}</p></div>`).join('')}`:'<div class="empty">No mock tests recorded yet.</div>'}</div></div>`;
+  return `<div class="stats">${stat('TESTS TAKEN',db.tests.length,'Total recorded')}${stat('AVERAGE SCORE',avg,'Out of 720')}${stat('BEST SCORE',db.tests.length?Math.max(...db.tests.map(t=>t.score)):0,'Out of 720')}${stat('LATEST ACCURACY',db.tests.length?db.tests[db.tests.length-1].accuracy+'%':'—','As entered')}</div>${mockBuilderHTML()}${upcomingTestsHTML()}<div class="two-col"><div class="card"><h3>Record mock test</h3><form id="testForm" oninput="autoCalcMockScore()"><div class="field"><label>TEST NAME</label><input name="name" placeholder="e.g. Full syllabus test 04" required></div><div class="form-grid"><div class="field"><label>SCORE ( / 720 )</label><input name="score" type="number" min="0" max="720" required></div><div class="field"><label>ACCURACY (%)</label><input name="accuracy" type="number" min="0" max="100" placeholder="e.g. 72"></div></div><div class="form-grid"><div class="field"><label>PHYSICS</label><input name="physics" type="number" min="0" max="180" placeholder="Score"></div><div class="field"><label>CHEMISTRY</label><input name="chemistry" type="number" min="0" max="180" placeholder="Score"></div></div><div class="field"><label>BIOLOGY</label><input name="biology" type="number" min="0" max="360" placeholder="Score"></div><div class="field"><label>ATTACH TEST PAPER / ANALYSIS (IMAGE OR PDF, OPTIONAL)</label><input type="file" name="file" accept="image/*,application/pdf"></div><label style="display:flex;align-items:center;gap:8px;font-size:12px;margin:2px 0 14px"><input type="checkbox" name="analysisDone" style="width:auto"> Analysis done ✅</label><button class="btn">Save test</button></form></div><div class="card"><h3>Test history</h3>${db.tests.length?`<div class="table-wrap"><table><thead><tr><th>TEST</th><th>SCORE</th><th>P / C / B</th><th>ACCURACY</th><th>DATE</th><th>ANALYSIS</th><th></th></tr></thead><tbody>${db.tests.slice().reverse().map(t=>{const pcb=(t.physics||t.chemistry||t.biology)?`${t.physics||0} / ${t.chemistry||0} / ${t.biology||0}`:'—';return `<tr><td>${esc(t.name)}</td><td><b>${t.score}</b></td><td><span class="muted">${pcb}</span></td><td>${t.accuracy||'—'}%</td><td>${t.date}</td><td style="white-space:nowrap"><button type="button" class="tag ${t.analysisDone?'green':''}" style="cursor:pointer;${t.analysisDone?'':'background:#4a1019;color:#fca5a5;border-color:#ef4444'}" onclick="toggleTestAnalysis('${t.id}')">${t.analysisDone?'✅ Done':'● Pending'}</button>${t.fileId?` <button type="button" class="icon-btn" style="padding:3px 7px" title="Open file" onclick="previewFile('${t.fileId}')">📎</button>`:''}</td><td><button class="icon-btn" onclick="removeTest('${t.id}')">×</button></td></tr>`}).join('')}</tbody></table></div>${db.tests.slice().reverse().slice(0,3).map(t=>`<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><b style="font-size:11px">${esc(t.name)}</b><p class="muted" style="font-size:10px">${t.analysis?esc(t.analysis):(t.analysisDone?'Analysis done.':'Analysis pending.')}</p></div>`).join('')}`:'<div class="empty">No mock tests recorded yet.</div>'}</div></div>`;
 }
 function dayKeys(n){return Array.from({length:n},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(n-1-i));return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')})}
 function dayLabel(k){return new Date(k+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short'})}
