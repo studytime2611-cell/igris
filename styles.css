@@ -575,3 +575,6 @@ html.theme-dark .modal-overlay{background:rgba(6,6,10,.92)}
 .timer-full.wall-ananya .tf-state{color:#ffd9de}
 .timer-full.wall-ananya .tf-label{color:#ffe08a}
 .timer-full.wall-ananya .tf-wall-chip,.timer-full.wall-ananya .btn.ghost{background:rgba(0,0,0,.5);color:#fff;border-color:rgba(255,255,255,.25)}
+
+/* Twemoji fallback images (only used when system emoji font is missing) */
+img.emoji{height:1.1em;width:1.1em;margin:0 .06em;vertical-align:-0.18em;display:inline-block}

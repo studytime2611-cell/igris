@@ -3644,3 +3644,68 @@ document.addEventListener('visibilitychange',async()=>{
   const el=document.getElementById('timerFull');
   if(el&&!el.hidden&&'wakeLock' in navigator){try{wakeLock=await navigator.wakeLock.request('screen')}catch(_){}}
 });
+
+
+/* ===== Emoji fallback for old PCs/browsers that show ▯ boxes =====
+   Only activates if the device can't draw color emoji. Uses Twemoji images (needs internet once; cached after). */
+(function(){
+  function colorEmojiOk(ch){
+    try{
+      const c=document.createElement('canvas');c.width=c.height=36;
+      const x=c.getContext('2d');x.textBaseline='top';x.font='24px sans-serif';x.fillText(ch,2,2);
+      const d=x.getImageData(0,0,36,36).data;
+      for(let i=0;i<d.length;i+=4){
+        if(d[i+3]>40&&(Math.abs(d[i]-d[i+1])>25||Math.abs(d[i+1]-d[i+2])>25))return true;
+      }
+      return false;
+    }catch(e){return true} // can't test -> don't touch anything
+  }
+  function init(){
+    if(colorEmojiOk('\u{1F600}')&&colorEmojiOk('\u{1F974}'))return; // emoji already fine here
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/@twemoji/api@15.1.0/dist/twemoji.min.js';
+    s.crossOrigin='anonymous';
+    s.onload=start;
+    document.head.appendChild(s);
+  }
+  const SKIP={SCRIPT:1,STYLE:1,TEXTAREA:1,SELECT:1,OPTION:1,TITLE:1,NOSCRIPT:1,INPUT:1};
+  function esc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function fixText(n){
+    const p=n.parentNode;
+    if(!p||SKIP[p.nodeName]||!window.twemoji||!twemoji.test(n.nodeValue))return;
+    const box=document.createElement('span');
+    box.innerHTML=twemoji.parse(esc(n.nodeValue),{folder:'svg',ext:'.svg',className:'emoji'});
+    const frag=document.createDocumentFragment();
+    while(box.firstChild)frag.appendChild(box.firstChild);
+    p.replaceChild(frag,n);
+  }
+  function fixTree(root){
+    if(!root||!root.isConnected)return;
+    if(root.nodeType===3){fixText(root);return}
+    if(root.nodeType!==1||SKIP[root.nodeName])return;
+    const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null);
+    const list=[];let n;
+    while((n=w.nextNode()))list.push(n);
+    list.forEach(fixText);
+  }
+  function start(){
+    fixTree(document.body);
+    const pending=new Set();let queued=false;
+    const mo=new MutationObserver(muts=>{
+      muts.forEach(m=>{
+        if(m.type==='characterData')pending.add(m.target);
+        else m.addedNodes.forEach(nd=>pending.add(nd));
+      });
+      if(queued)return;queued=true;
+      requestAnimationFrame(()=>{
+        queued=false;
+        mo.disconnect();
+        const items=Array.from(pending);pending.clear();
+        items.forEach(fixTree);
+        mo.observe(document.body,{childList:true,subtree:true,characterData:true});
+      });
+    });
+    mo.observe(document.body,{childList:true,subtree:true,characterData:true});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
