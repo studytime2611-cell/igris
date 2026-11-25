@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#09090d">
 <title>IGRIS — NEET Command Center</title>
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="styles.css?v=20261125b">
+<link rel="stylesheet" href="styles.css?v=20261125d">
 </head>
 <body>
 <div class="top-live-banner" id="topFocusBanner" hidden>
@@ -56,6 +56,7 @@
       <div><div class="eyebrow" id="todayLabel">YOUR TRAINING GROUND</div><div class="top-title" id="viewTitle">Dashboard</div></div>
       <div class="top-actions">
         <span class="date-chip" id="dateChip"></span>
+        <button class="icon-btn" id="themeBtn" title="Toggle Dark / Light theme" onclick="toggleAppTheme()">🌙</button>
         <button class="icon-btn" id="zenBtn" title="Toggle Full View">⛶</button>
         <button class="icon-btn" id="importBtn" title="Import backup">⇩</button>
         <button class="icon-btn" id="exportBtn" title="Export backup">⇧</button>
@@ -79,7 +80,7 @@
 
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept="application/json" hidden>
-<script src="app.js?v=20261125b"></script>
+<script src="app.js?v=20261125c"></script>
   <script>
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister()));
