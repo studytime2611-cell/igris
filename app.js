@@ -86,7 +86,7 @@ function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt
 function toast(s){let t=document.getElementById('toast');if(!t)return;t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2300)}
 function dateText(d=today()){return new Date(d+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})}
 
-const SFX={ohno:'sfx-ohno.mp3',aachi:'sfx-aachi.mp3'};
+const SFX={ohno:'sfx-ohno.mp3',aachi:'sfx-aachi.mp3',wolf:'sfx-wolf.wav',guitar:'sfx-guitar.wav'};
 const sfxCache={};
 function playSfx(name){
   try{
@@ -108,6 +108,7 @@ window.toggleAppSound=()=>{
   save();
   toast(db.settings.soundEnabled?'Sounds ON 🔊':'Sounds OFF 🔇');
   render();
+  syncFocusMedia();
 };
 
 async function requestBrowserNotifyPermission(showToast=true){
@@ -283,8 +284,19 @@ const TIMER_WALLS=[
   {id:'study2',label:'🐱 Cat nap'},
   {id:'study3',label:'💜 Mom pride'},
   {id:'redsun',label:'🔴 Red sun'},
-  {id:'knight',label:'⚔️ Knight'}
+  {id:'knight',label:'⚔️ Knight'},
+  {id:'cutecat',label:'🐱 I am cute'},
+  {id:'guts',label:'🗡️ Guts'},
+  {id:'anya',label:'🥜 Anya'},
+  {id:'shinchan',label:'🖍️ Shinchan'},
+  {id:'vrainforest',label:'🌧️ Rain forest',video:'wall-vid-rainforest.mp4'},
+  {id:'vheavyrain',label:'🌧️ Heavy rain',video:'wall-vid-heavyrain.mp4'},
+  {id:'vrainywindow',label:'🪟 Rainy window',video:'wall-vid-rainywindow.mp4'},
+  {id:'vmilkyway',label:'🌌 Milky Way',video:'wall-vid-milkyway.mp4'},
+  {id:'vmatterhorn',label:'🏔️ Matterhorn',video:'wall-vid-matterhorn.mp4'},
+  {id:'vtunnel',label:'🚇 Tunnel',video:'wall-vid-tunnel.mp4'}
 ];
+const VIDEO_WALL_IDS=TIMER_WALLS.filter(w=>w.video).map(w=>w.id);
 function applyTimerWallpaper(el){
   if(!el)return;
   const id=(db.settings&&db.settings.timerWall)||'soft';
@@ -294,6 +306,28 @@ function applyTimerWallpaper(el){
   el.style.backgroundImage='';
   el.style.backgroundSize='';
   el.style.backgroundPosition='';
+  // video wallpaper (only loads the file when that wall is selected)
+  const w=TIMER_WALLS.find(x=>x.id===valid);
+  el.classList.toggle('wall-video',!!(w&&w.video));
+  const v=el.querySelector('#tfVideo');
+  if(v){
+    if(w&&w.video){
+      if(v.getAttribute('data-src')!==w.video){
+        v.setAttribute('data-src',w.video);
+        v.muted=true;v.loop=true;
+        v.src=w.video;
+        try{v.load()}catch(_){}
+      }
+      v.style.display='block';
+    }else{
+      if(v.getAttribute('data-src')){
+        try{v.pause()}catch(_){}
+        v.removeAttribute('data-src');v.removeAttribute('src');
+        try{v.load()}catch(_){}
+      }
+      v.style.display='none';
+    }
+  }
 }
 window.setTimerWallpaper=id=>{
   db.settings=db.settings||{};
@@ -307,6 +341,7 @@ window.setTimerWallpaper=id=>{
       b.classList.toggle('active',b.getAttribute('data-wall')===id);
     });
   }
+  syncFocusMedia();
 };
 function applyAppTheme(){
   const t=(db.settings&&db.settings.theme)==='dark'?'dark':'light';
@@ -322,10 +357,10 @@ window.toggleAppTheme=()=>{
   const next=(db.settings.theme==='dark')?'light':'dark';
   db.settings.theme=next;
   // auto-suggest matching timer wall
-  if(next==='dark' && !['redsun','knight','dusk','study1','study2','study3'].includes(db.settings.timerWall)){
+  if(next==='dark' && !['redsun','knight','dusk','study1','study2','study3','guts',...VIDEO_WALL_IDS].includes(db.settings.timerWall)){
     db.settings.timerWall='redsun';
   }
-  if(next==='light' && ['redsun','knight'].includes(db.settings.timerWall)){
+  if(next==='light' && ['redsun','knight','guts'].includes(db.settings.timerWall)){
     db.settings.timerWall='soft';
   }
   save();
@@ -333,6 +368,34 @@ window.toggleAppTheme=()=>{
   const el=document.getElementById('timerFull');
   if(el)applyTimerWallpaper(el);
   toast(next==='dark'?'Dark / Galaxy theme 🌌':'Soft White theme ☀️');
+};
+// ---- Focus ambience: rain sound (toggle) + looping video wallpaper (only while timer runs) ----
+let rainAudio=null;
+function rainOn(){return !(db.settings&&db.settings.rainSound===false)}
+function rainLabel(){return rainOn()?'🌧️ Rain: ON':'🌧️ Rain: OFF'}
+function rainWanted(){return timerRunning&&rainOn()&&!(db.settings&&db.settings.soundEnabled===false)}
+function syncFocusMedia(){
+  try{
+    if(rainWanted()){
+      if(!rainAudio){rainAudio=new Audio('rain-loop.mp3');rainAudio.loop=true;rainAudio.volume=.55;rainAudio.preload='auto'}
+      if(rainAudio.paused){const p=rainAudio.play();if(p&&p.catch)p.catch(()=>{})}
+    }else if(rainAudio&&!rainAudio.paused){rainAudio.pause()}
+    const el=document.getElementById('timerFull');
+    const v=el&&el.querySelector('#tfVideo');
+    if(v){
+      const want=timerRunning&&!el.hidden&&!!v.getAttribute('data-src');
+      if(want){if(v.paused){v.muted=true;const p=v.play();if(p&&p.catch)p.catch(()=>{})}}
+      else if(!v.paused){v.pause()}
+    }
+  }catch(_){}
+}
+window.toggleRainSound=()=>{
+  db.settings=db.settings||{};
+  db.settings.rainSound=!rainOn();
+  save();
+  document.querySelectorAll('#tfRain,#rainBtn').forEach(b=>b.textContent=rainLabel());
+  syncFocusMedia();
+  toast(rainOn()?(db.settings.soundEnabled===false?'Rain ON (but app Sound OFF hai 🔇)':'Rain sound ON 🌧️'):'Rain sound OFF');
 };
 function ensureTimerFullEl(){
   let el=document.getElementById('timerFull');
@@ -342,12 +405,13 @@ function ensureTimerFullEl(){
   el.className='timer-full';
   el.hidden=true;
   const wallId=(db.settings&&db.settings.timerWall)||'soft';
-  el.innerHTML=`<button type="button" class="icon-btn tf-close" aria-label="Close" onclick="toggleTimerFullscreen(false)">×</button>
+  el.innerHTML=`<video class="tf-video" id="tfVideo" muted loop playsinline webkit-playsinline preload="none" aria-hidden="true" tabindex="-1"></video><div class="tf-video-shade"></div>
+  <button type="button" class="icon-btn tf-close" aria-label="Close" onclick="toggleTimerFullscreen(false)">×</button>
   <div class="tf-wall-bar" id="tfWallBar">${TIMER_WALLS.map(w=>`<button type="button" class="tf-wall-chip ${w.id===wallId?'active':''}" data-wall="${w.id}" onclick="setTimerWallpaper('${w.id}')">${w.label}</button>`).join('')}</div>
   <div class="tf-label" id="tfLabel"></div>
   <div class="tf-time" id="tfTime">00:00:00</div>
   <div class="tf-state" id="tfState"></div>
-  <div class="actions" style="justify-content:center;margin-top:30px"><button type="button" class="btn" id="tfToggle">Start focus</button><button type="button" class="btn secondary" id="tfReset">Reset</button></div>`;
+  <div class="actions" style="justify-content:center;margin-top:30px"><button type="button" class="btn" id="tfToggle">Start focus</button><button type="button" class="btn secondary" id="tfReset">Reset</button><button type="button" class="btn ghost" id="tfRain" onclick="toggleRainSound()">🌧️ Rain: ON</button></div>`;
   document.body.appendChild(el);
   applyTimerWallpaper(el);
   el.querySelector('#tfToggle').onclick=()=>startTimer();
@@ -363,12 +427,14 @@ function updateTimerFullDOM(){
   document.getElementById('tfToggle').textContent=timerRunning?'Pause':'Start focus';
   document.getElementById('tfState').textContent=timerRunning?'FOCUS SESSION ACTIVE':(timerSeconds<=0?'SESSION COMPLETE':(timerSeconds!==timerInitial?'PAUSED':'READY WHEN YOU ARE'));
   document.getElementById('tfLabel').textContent=timerLabel?('MISSION • '+timerLabel):'';
+  const rb=document.getElementById('tfRain');if(rb)rb.textContent=rainLabel();
 }
 window.toggleTimerFullscreen=async force=>{
   const el=ensureTimerFullEl();
   const next=typeof force==='boolean'?force:el.hidden;
   el.hidden=!next;
   document.body.classList.toggle('timer-full-open',next);
+  syncFocusMedia();
   if(next){
     updateTimerFullDOM();
     try{if(!document.fullscreenElement&&document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen()}catch(_){}
@@ -1113,7 +1179,7 @@ function focus(){
     <div class="card timer-wrap">
       <div class="timer-top-bar">
         <div class="timer-state" id="timerState">${timerRunning?'FOCUS SESSION ACTIVE':'READY WHEN YOU ARE'}</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="toggleTimerFullscreen(true)">⛶ Full screen</button><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="requestBrowserNotifyPermission()">🔔 Alert: ${esc(notifyStatus)}</button><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="toggleAppSound()">${(db.settings&&db.settings.soundEnabled===false)?'🔇 Sound OFF':'🔊 Sound ON'}</button></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="toggleTimerFullscreen(true)">⛶ Full screen</button><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="requestBrowserNotifyPermission()">🔔 Alert: ${esc(notifyStatus)}</button><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="toggleAppSound()">${(db.settings&&db.settings.soundEnabled===false)?'🔇 Sound OFF':'🔊 Sound ON'}</button><button type="button" class="btn ghost" id="rainBtn" style="padding:4px 9px;font-size:10px" onclick="toggleRainSound()">${rainLabel()}</button></div>
       </div>
       <div class="timer-flip-wrap">
         <div class="timer-flip-unit"><div class="timer-flip-val" id="tHrs">${h}</div><div class="timer-flip-lbl">HRS</div></div>
@@ -1172,6 +1238,7 @@ function updateTimerDOM(){
   if(b1)b1.textContent=timerRunning?'Pause':'Start focus';
   updateTopFocusUI();
   updateTimerFullDOM();
+  syncFocusMedia();
 }
 window.setTimer=m=>{
   pauseMissionClock();
@@ -1219,6 +1286,7 @@ function finishTimer(){
     db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,questions:0,topic:'Completed flip timer session'});
   }
   save();
+  syncFocusMedia();
   playSfx('ohno');
   toast(`Focus complete! ${completedMins} min session logged.`);
   sendTopNotification('⏰ IGRIS Focus Complete!',`${completedMins} min focus session logged.`,'igris-focus-timer',{requireInteraction:true,renotify:true,silent:false,vibrate:[300,150,300,150,600]});
@@ -1838,6 +1906,7 @@ window.answerQuizOpt=(choiceIdx)=>{
       toast('Saved to Mistake Hunter with True Answer.');
     }
   }
+  if(isCorrect)playSfx('wolf');
   clearQuizPace();
   recomputeQuizScore();
   if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();else saveQuizProgress();
@@ -1858,6 +1927,7 @@ window.skipQuizQuestion=()=>{
     quizIdx=activeQuiz.length;
     saveQuizAttemptIfDone();
     render();
+    playSfx('guitar');
     return;
   }
   quizIdx++;
@@ -1876,6 +1946,7 @@ window.nextQuizQuestion=()=>{
     recomputeQuizScore();
     saveQuizAttemptIfDone();
     render();
+    playSfx('guitar');
     return;
   }
   quizIdx++;

@@ -533,3 +533,38 @@ html.theme-dark .modal-overlay{background:rgba(6,6,10,.92)}
 .timer-full.wall-knight .tf-wall-chip{background:rgba(0,0,0,.5);color:#fff;border-color:rgba(255,255,255,.2)}
 .timer-full.wall-redsun .tf-wall-chip.active,
 .timer-full.wall-knight .tf-wall-chip.active{background:#e33b4b;color:#fff}
+
+
+/* ===== Video wallpapers + rain (focus timer) ===== */
+.tf-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;display:none;background:#000;pointer-events:none}
+.tf-video-shade{position:absolute;inset:0;z-index:0;display:none;pointer-events:none;background:linear-gradient(rgba(0,0,0,.30),rgba(0,0,0,.50))}
+.timer-full.wall-video{background:#000}
+.timer-full.wall-video .tf-video-shade{display:block}
+.timer-full.wall-video .tf-time{color:#fff;text-shadow:0 4px 28px #000c,0 0 40px #ffffff33}
+.timer-full.wall-video .tf-state{color:#f0d0d6}
+.timer-full.wall-video .tf-label{color:#ffe08a}
+.timer-full.wall-video .tf-wall-chip,.timer-full.wall-video .btn.ghost{background:rgba(0,0,0,.5);color:#fff;border-color:rgba(255,255,255,.25)}
+.timer-full.wall-video .tf-wall-chip.active{background:#e33b4b;color:#fff}
+/* many wallpaper chips -> single scrollable row so it never covers the clock */
+.tf-wall-bar{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.tf-wall-bar::-webkit-scrollbar{display:none}
+.tf-wall-chip{flex:0 0 auto;white-space:nowrap}
+
+/* ===== Image wallpapers: cute cat, Guts, Anya, Shinchan ===== */
+.timer-full.wall-cutecat,.timer-full.wall-guts,.timer-full.wall-anya,.timer-full.wall-shinchan{background-size:cover;background-position:center;background-repeat:no-repeat}
+.timer-full.wall-cutecat{background-color:#aec2ca;background-image:url('wall-cutecat.jpg')}
+.timer-full.wall-guts{background-color:#0a0610;background-image:linear-gradient(rgba(0,0,0,.35),rgba(0,0,0,.5)),url('wall-guts.jpg')}
+.timer-full.wall-anya{background-color:#ffa31a;background-image:url('wall-anya.jpg')}
+.timer-full.wall-shinchan{background-color:#fff8dc;background-image:url('wall-shinchan.jpg')}
+/* light artwork -> dark text */
+.timer-full.wall-cutecat .tf-time,.timer-full.wall-anya .tf-time,.timer-full.wall-shinchan .tf-time{color:#1f2430;text-shadow:0 2px 18px #ffffffaa}
+.timer-full.wall-cutecat .tf-state,.timer-full.wall-anya .tf-state,.timer-full.wall-shinchan .tf-state{color:#7a2a38}
+.timer-full.wall-cutecat .tf-label,.timer-full.wall-anya .tf-label,.timer-full.wall-shinchan .tf-label{color:#6b4e10}
+.timer-full.wall-cutecat .tf-wall-chip,.timer-full.wall-anya .tf-wall-chip,.timer-full.wall-shinchan .tf-wall-chip,
+.timer-full.wall-cutecat .btn.ghost,.timer-full.wall-anya .btn.ghost,.timer-full.wall-shinchan .btn.ghost{background:rgba(255,255,255,.6);color:#222;border-color:rgba(0,0,0,.12)}
+.timer-full.wall-cutecat .tf-wall-chip.active,.timer-full.wall-anya .tf-wall-chip.active,.timer-full.wall-shinchan .tf-wall-chip.active{background:#e33b4b;color:#fff}
+/* dark artwork -> light text */
+.timer-full.wall-guts .tf-time{color:#fff;text-shadow:0 4px 28px #000c,0 0 40px #e33b4b66}
+.timer-full.wall-guts .tf-state{color:#f0a8b0}
+.timer-full.wall-guts .tf-label{color:#f0d78a}
+.timer-full.wall-guts .tf-wall-chip,.timer-full.wall-guts .btn.ghost{background:rgba(0,0,0,.5);color:#fff;border-color:rgba(255,255,255,.2)}
