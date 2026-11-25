@@ -533,3 +533,27 @@ html.theme-dark .modal-overlay{background:rgba(6,6,10,.92)}
 .timer-full.wall-knight .tf-wall-chip{background:rgba(0,0,0,.5);color:#fff;border-color:rgba(255,255,255,.2)}
 .timer-full.wall-redsun .tf-wall-chip.active,
 .timer-full.wall-knight .tf-wall-chip.active{background:#e33b4b;color:#fff}
+
+/* =========================================================
+   IGRIS PDF → QUIZ CONVERTER — additive styles only
+   Uses existing theme variables; no existing selectors replaced.
+   ========================================================= */
+.pdf-converter-card{border-color:var(--line)}
+.pdf-review-list{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+.pdf-review-item{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:13px}
+.pdf-review-top{display:flex;align-items:center;gap:9px;margin-bottom:8px}
+.pdf-review-top .tag{margin-left:auto}
+.pdf-review-check{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text)}
+.pdf-review-check input{width:16px;height:16px;accent-color:var(--red)}
+.pdf-review-item textarea{min-height:54px}
+html.theme-dark .pdf-review-item{background:#171722;border-color:#343342}
+@media(max-width:680px){
+  .pdf-review-item{padding:10px}
+  .pdf-review-top{flex-wrap:wrap}
+  .pdf-review-top .tag{margin-left:0}
+}
+
+/* PDF-to-Quiz v1.2: preserved source-page diagrams in review and quiz */
+.pdf-review-image,.quiz-source-diagram-wrap{margin:10px 0;padding:9px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2,rgba(127,127,127,.06))}
+.pdf-review-image img,.quiz-source-diagram{display:block;width:100%;height:auto;max-height:520px;object-fit:contain;border-radius:8px;background:#fff}
+.quiz-source-diagram-wrap{margin:12px 0 16px}
