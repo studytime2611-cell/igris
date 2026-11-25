@@ -21,7 +21,7 @@ const seed=()=>({
   quizzes:[],
   quizAttempts:[],
   upcomingTests:[],
-  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true,dailyGoals:{mins:120,qs:40,missions:3},timerWall:'soft'}
+  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true,soundEnabled:true,dailyGoals:{mins:120,qs:40,missions:3},timerWall:'soft'}
 });
 
 let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All', selectedQuizSubject=null, analysisTab='Physics';
@@ -38,6 +38,7 @@ let mockBuild={step:'subject', subjects:['Physics','Chemistry','Biology'], chapt
 let quizReview=new Set(); // question ids marked for review in active quiz
 let mistakeTypeFilter='All';
 let mistakeSubjectFilter='All';
+let quizPaceLeft=0, quizPaceInterval=null;
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -84,6 +85,30 @@ function save(){
 function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function toast(s){let t=document.getElementById('toast');if(!t)return;t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2300)}
 function dateText(d=today()){return new Date(d+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})}
+
+const SFX={ohno:'sfx-ohno.mp3',aachi:'sfx-aachi.mp3'};
+const sfxCache={};
+function playSfx(name){
+  try{
+    if(db.settings&&db.settings.soundEnabled===false)return;
+    const src=SFX[name];
+    if(!src)return;
+    let a=sfxCache[name];
+    if(!a){a=new Audio(src);a.preload='auto';sfxCache[name]=a}
+    a.pause();
+    a.currentTime=0;
+    const p=a.play();
+    if(p&&p.catch)p.catch(()=>{});
+  }catch(_){}
+}
+window.toggleAppSound=()=>{
+  db.settings=db.settings||{};
+  const on=db.settings.soundEnabled!==false;
+  db.settings.soundEnabled=!on;
+  save();
+  toast(db.settings.soundEnabled?'Sounds ON 🔊':'Sounds OFF 🔇');
+  render();
+};
 
 async function requestBrowserNotifyPermission(showToast=true){
   if(!('Notification' in window)){
@@ -334,6 +359,28 @@ window.resetCurrentTimer=()=>{
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape' && document.body.classList.contains('zen-mode'))toggleZenMode(false);
   if(e.key==='Escape' && document.body.classList.contains('timer-full-open'))toggleTimerFullscreen(false);
+  // Quiz shortcuts — ignore when typing in inputs
+  const tag=(e.target&&e.target.tagName||'').toLowerCase();
+  if(tag==='input'||tag==='textarea'||tag==='select'||e.target?.isContentEditable)return;
+  if(!activeQuiz||quizIdx>=activeQuiz.length)return;
+  if(current!=='practice')return;
+  const k=e.key;
+  if(k>='1'&&k<='4'){
+    e.preventDefault();
+    if(!quizAnswered)answerQuizOpt(parseInt(k,10)-1);
+  }else if(k==='s'||k==='S'){
+    e.preventDefault();
+    if(!quizAnswered)skipQuizQuestion();
+  }else if(k==='n'||k==='N'||k==='Enter'){
+    e.preventDefault();
+    if(quizAnswered)nextQuizQuestion();
+  }else if(k==='p'||k==='P'||k==='Backspace'){
+    e.preventDefault();
+    prevQuizQuestion();
+  }else if(k==='r'||k==='R'){
+    e.preventDefault();
+    toggleQuizReview();
+  }
 });
 
 const IDB_NAME='igris-files-db', STORE_NAME='files';
@@ -1038,7 +1085,7 @@ function focus(){
     <div class="card timer-wrap">
       <div class="timer-top-bar">
         <div class="timer-state" id="timerState">${timerRunning?'FOCUS SESSION ACTIVE':'READY WHEN YOU ARE'}</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="toggleTimerFullscreen(true)">⛶ Full screen</button><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="requestBrowserNotifyPermission()">🔔 Alert: ${esc(notifyStatus)}</button></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="toggleTimerFullscreen(true)">⛶ Full screen</button><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="requestBrowserNotifyPermission()">🔔 Alert: ${esc(notifyStatus)}</button><button type="button" class="btn ghost" style="padding:4px 9px;font-size:10px" onclick="toggleAppSound()">${(db.settings&&db.settings.soundEnabled===false)?'🔇 Sound OFF':'🔊 Sound ON'}</button></div>
       </div>
       <div class="timer-flip-wrap">
         <div class="timer-flip-unit"><div class="timer-flip-val" id="tHrs">${h}</div><div class="timer-flip-lbl">HRS</div></div>
@@ -1144,6 +1191,7 @@ function finishTimer(){
     db.sessions.push({id:crypto.randomUUID(),date:today(),subject:'Focus Timer',minutes:completedMins,questions:0,topic:'Completed flip timer session'});
   }
   save();
+  playSfx('ohno');
   toast(`Focus complete! ${completedMins} min session logged.`);
   sendTopNotification('⏰ IGRIS Focus Complete!',`${completedMins} min focus session logged.`,'igris-focus-timer',{requireInteraction:true,renotify:true,silent:false,vibrate:[300,150,300,150,600]});
   render();
@@ -1209,7 +1257,7 @@ function markBadgeStyle(mk){
 window.setPracticeTab=t=>{clearInterval(quizClockInterval);practiceTab=t;render()};
 window.setAttemptChapterFilter=ch=>{attemptChapterFilter=ch;render()};
 window.selectQuizSubject=sub=>{selectedQuizSubject=sub;render()};
-window.exitActiveQuiz=()=>{clearInterval(quizClockInterval);saveQuizProgress();activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;quizAnswers={};skipDrill=false;render()};
+window.exitActiveQuiz=()=>{clearQuizPace();clearInterval(quizClockInterval);saveQuizProgress();activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;quizAnswers={};skipDrill=false;render()};
 window.launchChapterBtn=btn=>{
   const sub=btn?.dataset?.sub||'All';
   const chap=btn?.dataset?.chap||'All';
@@ -1223,6 +1271,50 @@ function startQuizStopwatch(){
     quizElapsedSec++;
     const el=document.getElementById('quizLiveClock');
     if(el)el.textContent=fmtMMSS(quizElapsedSec);
+  },1000);
+}
+function clearQuizPace(){
+  clearInterval(quizPaceInterval);
+  quizPaceInterval=null;
+  quizPaceLeft=0;
+}
+function getQuizPaceSec(){
+  const n=parseInt(db.settings&&db.settings.quizPaceSec,10);
+  return [0,45,60,90].includes(n)?n:0;
+}
+window.setQuizPace=sec=>{
+  db.settings=db.settings||{};
+  db.settings.quizPaceSec=parseInt(sec,10)||0;
+  save();
+  if(activeQuiz&&quizIdx<activeQuiz.length&&!quizAnswered)startQuizPace();
+  else render();
+  toast(db.settings.quizPaceSec?`Pace: ${db.settings.quizPaceSec}s / Q`:'Pace timer OFF');
+};
+function startQuizPace(){
+  clearQuizPace();
+  const sec=getQuizPaceSec();
+  if(!sec||!activeQuiz||quizIdx>=activeQuiz.length||quizAnswered)return;
+  quizPaceLeft=sec;
+  const tick=()=>{
+    const el=document.getElementById('quizPaceClock');
+    if(el){
+      el.textContent=String(quizPaceLeft);
+      el.style.color=quizPaceLeft<=10?'#ef4444':(quizPaceLeft<=20?'#f59e0b':'');
+    }
+  };
+  tick();
+  quizPaceInterval=setInterval(()=>{
+    if(quizAnswered||!activeQuiz||quizIdx>=activeQuiz.length){clearQuizPace();return}
+    quizPaceLeft--;
+    tick();
+    if(quizPaceLeft<=0){
+      clearQuizPace();
+      // time up → auto skip (NEET pressure)
+      if(!quizAnswered){
+        toast('Time up — skipped');
+        skipQuizQuestion();
+      }
+    }
   },1000);
 }
 
@@ -1343,10 +1435,12 @@ function beginQuizSession(items,meta,key=null,args=null){
   quizAnswers={};
   quizReview=new Set();
   quizElapsedSec=0;
+  clearQuizPace();
   skipDrill=!!(meta&&meta.skipDrill);
   drillNet=0;drillForced=0;drillRight=0;drillWrong=0;drillSkip=0;
   practiceTab='quiz';
   render();
+  startQuizPace();
 }
 function restoreQuizAnswerState(idx){
   const saved=quizAnswers[idx];
@@ -1700,6 +1794,7 @@ window.answerQuizOpt=(choiceIdx)=>{
     else{drillNet-=1;drillForced-=1;drillWrong++}
   }
   if(!isCorrect){
+    playSfx('ohno');
     const exists=db.mistakes.some(m=>!m.closed && m.error.includes(curQ.q.slice(0,45)));
     if(!exists){
       db.mistakes.push({
@@ -1715,12 +1810,15 @@ window.answerQuizOpt=(choiceIdx)=>{
       toast('Saved to Mistake Hunter with True Answer.');
     }
   }
+  clearQuizPace();
   recomputeQuizScore();
   if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();else saveQuizProgress();
   render();
 };
 window.skipQuizQuestion=()=>{
   if(quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
+  clearQuizPace();
+  playSfx('aachi');
   // Mark skipped — do NOT reveal answer; jump to next Q
   quizAnswers[quizIdx]={picked:-1,correct:false,skipped:true};
   if(skipDrill){
@@ -1738,12 +1836,14 @@ window.skipQuizQuestion=()=>{
   restoreQuizAnswerState(quizIdx);
   saveQuizProgress();
   render();
+  if(!quizAnswered)startQuizPace();
 };
 
 window.nextQuizQuestion=()=>{
   if(!activeQuiz)return;
   if(quizIdx+1>=activeQuiz.length){
     if(!quizAnswered && !quizAnswers[quizIdx]){toast('Answer or Skip before finishing.');return}
+    clearQuizPace();
     quizIdx=activeQuiz.length;
     recomputeQuizScore();
     saveQuizAttemptIfDone();
@@ -1754,13 +1854,16 @@ window.nextQuizQuestion=()=>{
   restoreQuizAnswerState(quizIdx);
   saveQuizProgress();
   render();
+  if(!quizAnswered)startQuizPace();
 };
 window.prevQuizQuestion=()=>{
   if(!activeQuiz||quizIdx<=0)return;
+  clearQuizPace();
   quizIdx--;
   restoreQuizAnswerState(quizIdx);
   saveQuizProgress();
   render();
+  if(!quizAnswered)startQuizPace();
 };
 window.toggleQuizReview=()=>{
   if(!activeQuiz||!activeQuiz[quizIdx])return;
@@ -1880,10 +1983,16 @@ function practiceView(){
           <h3>${activeQuiz && quizIdx < activeQuiz.length ? (skipDrill?`Skip Drill (${quizIdx+1}/${activeQuiz.length}) • Net ${drillNet}`:`Active Quiz (${quizIdx+1}/${activeQuiz.length}) • Score: ${quizScore}`) : activeQuiz && quizIdx >= activeQuiz.length ? (skipDrill?`Drill done • Net ${drillNet} (R${drillRight}/W${drillWrong}/S${drillSkip})`:'Quiz Completed & Saved!') : selectedQuizSubject ? `${selectedQuizSubject} — Select Chapter` : 'MCQ Quiz Runner'}</h3>
           <div class="actions" style="align-items:center">
             ${activeQuiz && quizIdx < activeQuiz.length ? `<span class="tag gold" style="font-size:11px">⏱ <b id="quizLiveClock">${fmtMMSS(quizElapsedSec)}</b> • ${Math.max(1,Math.round(quizElapsedSec/Math.max(quizIdx+(quizAnswered?1:0),1)))}s/Q</span>` : ''}
+            ${activeQuiz && quizIdx < activeQuiz.length && getQuizPaceSec() ? `<span class="tag" style="font-size:11px;${quizPaceLeft<=10?'background:#4a1019;border-color:#ef4444;color:#fecaca':''}">⏳ <b id="quizPaceClock">${quizPaceLeft||getQuizPaceSec()}</b>s</span>` : ''}
             ${activeQuiz && quizIdx<activeQuiz.length && activeQuizKey ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="restartActiveQuiz()">↺ Restart</button>` : ''}
             ${activeQuiz ? `<button type="button" class="btn secondary" style="padding:5px 10px" onclick="exitActiveQuiz()">← Back</button>` : selectedQuizSubject ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="selectQuizSubject(null)">← Back</button>` : ''}
           </div>
         </div>
+        ${!activeQuiz?`<div class="actions" style="margin-bottom:10px;flex-wrap:wrap;gap:6px;align-items:center">
+          <span class="muted" style="font-size:11px">Pace / Q:</span>
+          ${[0,45,60,90].map(s=>`<button type="button" class="btn ${getQuizPaceSec()===s?'':'ghost'}" style="padding:4px 9px;font-size:10px" onclick="setQuizPace(${s})">${s===0?'OFF':s+'s'}</button>`).join('')}
+          <span class="muted" style="font-size:10px">• Keys: 1–4 answer · S skip · N next · P prev</span>
+        </div>`:''}
 
         ${activeQuiz && quizIdx < activeQuiz.length ? (()=>{
           const q=activeQuiz[quizIdx];
@@ -3266,7 +3375,10 @@ function render(){
     updateTopFocusUI();
     try{updateStreakBadge()}catch(_){}
     if(current==='dashboard')startLiveCountdown();
-    if(current==='practice' && practiceTab==='quiz' && activeQuiz && quizIdx<activeQuiz.length)startQuizStopwatch();
+    if(current==='practice' && practiceTab==='quiz' && activeQuiz && quizIdx<activeQuiz.length){
+      startQuizStopwatch();
+      if(!quizAnswered && getQuizPaceSec() && !quizPaceInterval)startQuizPace();
+    }
     if(current==='focus'){
       const stBtn=document.getElementById('startTimer');
       const rsBtn=document.getElementById('resetTimer');
