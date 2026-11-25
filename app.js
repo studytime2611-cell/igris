@@ -21,7 +21,7 @@ const seed=()=>({
   quizzes:[],
   quizAttempts:[],
   upcomingTests:[],
-  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true,soundEnabled:true,dailyGoals:{mins:120,qs:40,missions:3},timerWall:'soft'}
+  settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true,soundEnabled:true,theme:'light',dailyGoals:{mins:120,qs:40,missions:3},timerWall:'soft'}
 });
 
 let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All', selectedQuizSubject=null, analysisTab='Physics';
@@ -281,7 +281,9 @@ const TIMER_WALLS=[
   {id:'plain',label:'⬜ Clean'},
   {id:'study1',label:'🛏️ Study desk'},
   {id:'study2',label:'🐱 Cat nap'},
-  {id:'study3',label:'💜 Mom pride'}
+  {id:'study3',label:'💜 Mom pride'},
+  {id:'redsun',label:'🔴 Red sun'},
+  {id:'knight',label:'⚔️ Knight'}
 ];
 function applyTimerWallpaper(el){
   if(!el)return;
@@ -305,6 +307,32 @@ window.setTimerWallpaper=id=>{
       b.classList.toggle('active',b.getAttribute('data-wall')===id);
     });
   }
+};
+function applyAppTheme(){
+  const t=(db.settings&&db.settings.theme)==='dark'?'dark':'light';
+  document.documentElement.classList.toggle('theme-dark',t==='dark');
+  document.documentElement.classList.toggle('theme-light',t==='light');
+  const meta=document.querySelector('meta[name="theme-color"]');
+  if(meta)meta.setAttribute('content',t==='dark'?'#07060c':'#f5f6f8');
+  const btn=document.getElementById('themeBtn');
+  if(btn)btn.textContent=t==='dark'?'☀️':'🌙';
+}
+window.toggleAppTheme=()=>{
+  db.settings=db.settings||{};
+  const next=(db.settings.theme==='dark')?'light':'dark';
+  db.settings.theme=next;
+  // auto-suggest matching timer wall
+  if(next==='dark' && !['redsun','knight','dusk','study1','study2','study3'].includes(db.settings.timerWall)){
+    db.settings.timerWall='redsun';
+  }
+  if(next==='light' && ['redsun','knight'].includes(db.settings.timerWall)){
+    db.settings.timerWall='soft';
+  }
+  save();
+  applyAppTheme();
+  const el=document.getElementById('timerFull');
+  if(el)applyTimerWallpaper(el);
+  toast(next==='dark'?'Dark / Galaxy theme 🌌':'Soft White theme ☀️');
 };
 function ensureTimerFullEl(){
   let el=document.getElementById('timerFull');
@@ -3527,6 +3555,7 @@ try{
     save();
   }
 }catch(e){console.warn('analysis topic seed',e);db.analysisTopicsSeeded=true}
+try{applyAppTheme()}catch(_){}
 try{render()}catch(e){console.error('boot render',e)}
 try{checkDueReminders()}catch(_){}
 clearInterval(reminderInterval);
