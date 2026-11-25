@@ -568,3 +568,10 @@ html.theme-dark .modal-overlay{background:rgba(6,6,10,.92)}
 .timer-full.wall-guts .tf-state{color:#f0a8b0}
 .timer-full.wall-guts .tf-label{color:#f0d78a}
 .timer-full.wall-guts .tf-wall-chip,.timer-full.wall-guts .btn.ghost{background:rgba(0,0,0,.5);color:#fff;border-color:rgba(255,255,255,.2)}
+
+/* ===== Study girl wallpaper ===== */
+.timer-full.wall-ananya{background-color:#3a2a2e;background-size:cover;background-position:center;background-repeat:no-repeat;background-image:linear-gradient(rgba(0,0,0,.28),rgba(0,0,0,.42)),url('wall-ananya.jpg')}
+.timer-full.wall-ananya .tf-time{color:#fff;text-shadow:0 4px 28px #000c,0 0 40px #ffb86c66}
+.timer-full.wall-ananya .tf-state{color:#ffd9de}
+.timer-full.wall-ananya .tf-label{color:#ffe08a}
+.timer-full.wall-ananya .tf-wall-chip,.timer-full.wall-ananya .btn.ghost{background:rgba(0,0,0,.5);color:#fff;border-color:rgba(255,255,255,.25)}

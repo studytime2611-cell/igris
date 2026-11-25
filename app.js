@@ -86,7 +86,7 @@ function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt
 function toast(s){let t=document.getElementById('toast');if(!t)return;t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2300)}
 function dateText(d=today()){return new Date(d+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})}
 
-const SFX={ohno:'sfx-ohno.mp3',aachi:'sfx-aachi.mp3',wolf:'sfx-wolf.wav',guitar:'sfx-guitar.wav'};
+const SFX={ohno:'sfx-ohno.mp3',aachi:'sfx-aachi.mp3',sparkle:'sfx-sparkle.wav',guitar:'sfx-guitar.wav'};
 const sfxCache={};
 function playSfx(name){
   try{
@@ -285,6 +285,7 @@ const TIMER_WALLS=[
   {id:'study3',label:'💜 Mom pride'},
   {id:'redsun',label:'🔴 Red sun'},
   {id:'knight',label:'⚔️ Knight'},
+  {id:'ananya',label:'📖 Study girl'},
   {id:'cutecat',label:'🐱 I am cute'},
   {id:'guts',label:'🗡️ Guts'},
   {id:'anya',label:'🥜 Anya'},
@@ -1906,7 +1907,7 @@ window.answerQuizOpt=(choiceIdx)=>{
       toast('Saved to Mistake Hunter with True Answer.');
     }
   }
-  if(isCorrect)playSfx('wolf');
+  if(isCorrect)playSfx('sparkle');
   clearQuizPace();
   recomputeQuizScore();
   if(quizIdx+1>=activeQuiz.length)saveQuizAttemptIfDone();else saveQuizProgress();
