@@ -3518,7 +3518,7 @@ function mockLabView(){
 
 /* ===== Practice Sheet Tracker ===== */
 const READERA_SHEET_SEED=[
-  // Physics chapters (from your Readera collections)
+  // ===== Physics chapters (clean names — Readera folders) =====
   {name:'Kinematics',subject:'Physics',chapter:'Kinematics',source:'KPP'},
   {name:'NLM',subject:'Physics',chapter:'Laws of Motion',source:'KPP'},
   {name:'Circular Motion',subject:'Physics',chapter:'Circular Motion',source:'KPP'},
@@ -3538,15 +3538,61 @@ const READERA_SHEET_SEED=[
   {name:'EMI',subject:'Physics',chapter:'Electromagnetic Induction',source:'KPP'},
   {name:'Ray optics',subject:'Physics',chapter:'Ray Optics',source:'KPP'},
   {name:'AC',subject:'Physics',chapter:'Alternating Current',source:'KPP'},
-  {name:'Physics some advance book',subject:'Physics',chapter:'',source:'Other'},
+
+  // ===== Physics — document-style (KPP / Assignment / DPP) =====
+  {name:'Motion in a straight line - KPP-13',subject:'Physics',chapter:'Kinematics',source:'KPP'},
+  {name:'Kinematics - KPP-14',subject:'Physics',chapter:'Kinematics',source:'KPP'},
+  {name:'Kinematics - KPP-15 (Part 01)',subject:'Physics',chapter:'Kinematics',source:'KPP'},
+  {name:'Kinematics - KPP-15 (Part 02)',subject:'Physics',chapter:'Kinematics',source:'KPP'},
+  {name:'Kinematics - KPP-16',subject:'Physics',chapter:'Kinematics',source:'KPP'},
+  {name:'Kinematics - KPP-17',subject:'Physics',chapter:'Kinematics',source:'KPP'},
+  {name:'Kinematics - KPP-18',subject:'Physics',chapter:'Kinematics',source:'KPP'},
+  {name:'Kinematics - KPP-20',subject:'Physics',chapter:'Kinematics',source:'KPP'},
+  {name:'Motion in a plane - KPP-21 (NEET pyq)',subject:'Physics',chapter:'Kinematics',source:'KPP'},
+  {name:'Motion in a plane - DPP 01',subject:'Physics',chapter:'Kinematics',source:'DPP'},
+  {name:'Motion in a plane - DPP 02',subject:'Physics',chapter:'Kinematics',source:'DPP'},
+  {name:'Motion in a plane - DPP 03',subject:'Physics',chapter:'Kinematics',source:'DPP'},
+  {name:'Motion in a plane - DPP 04',subject:'Physics',chapter:'Kinematics',source:'DPP'},
+  {name:'Motion in a plane - Assignment 01',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
+  {name:'Motion in a plane - Assignment 02',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
+  {name:'Motion in a plane - Assignment 03',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
+  {name:'Motion in a plane - Assignment 04',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
+  {name:'Motion in a straight line - Assignment 01',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
+  {name:'Motion in a straight line - Assignment 02',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
+  {name:'Motion in a straight line - Assignment 03',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
+  {name:'Motion in a straight line - Assignment 04',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
+  {name:'Motion in a straight line - Assignment 05',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
+  {name:'NLM - KPP-22',subject:'Physics',chapter:'Laws of Motion',source:'KPP'},
+  {name:'NLM - KPP-23',subject:'Physics',chapter:'Laws of Motion',source:'KPP'},
+  {name:"Newton's Laws of Motion - KPP-24",subject:'Physics',chapter:'Laws of Motion',source:'KPP'},
+  {name:'Laws of motion - DPP 01',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
+  {name:'Laws of motion - DPP 02',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
+  {name:'Laws of motion - DPP 03',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
+  {name:'Laws of motion - DPP 04',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
+  {name:'Laws of motion - DPP 05',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
+  {name:'Current Electricity - KPP-61',subject:'Physics',chapter:'Current Electricity',source:'KPP'},
+  {name:'Current Electricity - KPP-62',subject:'Physics',chapter:'Current Electricity',source:'KPP'},
+  {name:'Current Electricity - KPP-63',subject:'Physics',chapter:'Current Electricity',source:'KPP'},
+  {name:'Moving Charges and Magnetism - Assignment 01',subject:'Physics',chapter:'Moving Charges and Magnetism',source:'PW Assignment'},
+  {name:'Moving Charges and Magnetism - Assignment 02',subject:'Physics',chapter:'Moving Charges and Magnetism',source:'PW Assignment'},
+  {name:'Moving Charges and Magnetism - KPP-66',subject:'Physics',chapter:'Moving Charges and Magnetism',source:'KPP'},
+  {name:'Moving Charges and Magnetism - KPP-67',subject:'Physics',chapter:'Moving Charges and Magnetism',source:'KPP'},
+
+  // ===== Common books (sirf ek baar) =====
+  {name:'Physics errorless E Book',subject:'Physics',chapter:'',source:'Other'},
+  {name:'HCV Volume 1',subject:'Physics',chapter:'',source:'Other'},
+  {name:'Allen complete PHYSICS',subject:'Physics',chapter:'',source:'Allen Module'},
+  {name:'ALLEN NEET PYQ UPTO 2025',subject:'Physics',chapter:'',source:'PYQ Sheet'},
+  {name:'ALLEN PHYSICS CLASS 11TH 2026 MODULE',subject:'Physics',chapter:'',source:'Allen Module'},
+  {name:'Physics Chapterwise Analysis NEET',subject:'Physics',chapter:'',source:'PYQ Sheet'},
   {name:'PHYSICS JEE MAIN PYQ',subject:'Physics',chapter:'',source:'JEE Mains Sheet'},
   {name:'PHYSICS NEET PYQ',subject:'Physics',chapter:'',source:'PYQ Sheet'},
-  {name:'Physics questions practice',subject:'Physics',chapter:'',source:'Other'},
   {name:'Mr physics',subject:'Physics',chapter:'',source:'MR*'},
-  {name:'KPP',subject:'Physics',chapter:'',source:'KPP'},
-  {name:'Final revision kpp',subject:'Physics',chapter:'',source:'KPP'},
+  {name:'Physics some advance book',subject:'Physics',chapter:'',source:'Other'},
+  {name:'Final revision KPP',subject:'Physics',chapter:'',source:'KPP'},
   {name:'Module section',subject:'Physics',chapter:'',source:'Allen Module'},
-  // Chemistry
+
+  // ===== Chemistry =====
   {name:'SOME BASIC CONCEPT of organic chemistry',subject:'Chemistry',chapter:'Some Basic Principles of Organic Chemistry',source:'KPP'},
   {name:'Hydrocarbon',subject:'Chemistry',chapter:'Hydrocarbons',source:'KPP'},
   {name:'Haloalkenes and Haloarenes',subject:'Chemistry',chapter:'Haloalkanes and Haloarenes',source:'KPP'},
@@ -3555,7 +3601,12 @@ const READERA_SHEET_SEED=[
   {name:'Biomolecules',subject:'Chemistry',chapter:'Biomolecules',source:'KPP'},
   {name:'Amines',subject:'Chemistry',chapter:'Amines',source:'KPP'},
   {name:'practical chemistry',subject:'Chemistry',chapter:'Practical Chemistry',source:'Other'},
-  // Biology / Modules / Tests
+  {name:'ERRORLESS CHEMISTRY',subject:'Chemistry',chapter:'',source:'Other'},
+  {name:'ALLEN CHEMISTRY MODULES 2026',subject:'Chemistry',chapter:'',source:'Allen Module'},
+  {name:'Chemistry at a Glance - Allen 2021',subject:'Chemistry',chapter:'',source:'Allen Module'},
+  {name:'Chemistry Chapterwise Analysis NEET',subject:'Chemistry',chapter:'',source:'PYQ Sheet'},
+
+  // ===== Biology / Modules / Tests =====
   {name:'BOTANY ALLEN MODULE',subject:'Biology',chapter:'',source:'Allen Module'},
   {name:'ZOOLOGY ALLEN MODULE',subject:'Biology',chapter:'',source:'Allen Module'},
   {name:'BIOLOGY SHORTS NOTES',subject:'Biology',chapter:'',source:'Self Notes'},
