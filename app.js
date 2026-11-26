@@ -3517,147 +3517,6 @@ function mockLabView(){
 }
 
 /* ===== Practice Sheet Tracker ===== */
-const READERA_SHEET_SEED=[
-  // ===== Physics chapters (clean names — Readera folders) =====
-  {name:'Kinematics',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'NLM',subject:'Physics',chapter:'Laws of Motion',source:'KPP'},
-  {name:'Circular Motion',subject:'Physics',chapter:'Circular Motion',source:'KPP'},
-  {name:'Rotation Motion',subject:'Physics',chapter:'System of Particles and Rotational Motion',source:'KPP'},
-  {name:'COM',subject:'Physics',chapter:'Center of Mass',source:'KPP'},
-  {name:'WEP',subject:'Physics',chapter:'Work, Energy and Power',source:'KPP'},
-  {name:'Mechanical properties of fluids',subject:'Physics',chapter:'Mechanical Properties of Fluids',source:'KPP'},
-  {name:'Mechanical properties of Solid',subject:'Physics',chapter:'Mechanical Properties of Solids',source:'KPP'},
-  {name:'Thermal properties of matter',subject:'Physics',chapter:'Thermal Properties of Matter',source:'KPP'},
-  {name:'KTG and thermodynamics',subject:'Physics',chapter:'Thermodynamics / KTG',source:'KPP'},
-  {name:'SHM',subject:'Physics',chapter:'Oscillations',source:'KPP'},
-  {name:'Waves',subject:'Physics',chapter:'Waves',source:'KPP'},
-  {name:'Electrostatics',subject:'Physics',chapter:'Electrostatics',source:'KPP'},
-  {name:'Current electricity',subject:'Physics',chapter:'Current Electricity',source:'KPP'},
-  {name:'Electric Potential and Capacitance',subject:'Physics',chapter:'Electrostatic Potential and Capacitance',source:'KPP'},
-  {name:'Magnetism',subject:'Physics',chapter:'Moving Charges and Magnetism',source:'KPP'},
-  {name:'EMI',subject:'Physics',chapter:'Electromagnetic Induction',source:'KPP'},
-  {name:'Ray optics',subject:'Physics',chapter:'Ray Optics',source:'KPP'},
-  {name:'AC',subject:'Physics',chapter:'Alternating Current',source:'KPP'},
-
-  // ===== Physics — document-style (KPP / Assignment / DPP) =====
-  {name:'Motion in a straight line - KPP-13',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'Kinematics - KPP-14',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'Kinematics - KPP-15 (Part 01)',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'Kinematics - KPP-15 (Part 02)',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'Kinematics - KPP-16',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'Kinematics - KPP-17',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'Kinematics - KPP-18',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'Kinematics - KPP-20',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'Motion in a plane - KPP-21 (NEET pyq)',subject:'Physics',chapter:'Kinematics',source:'KPP'},
-  {name:'Motion in a plane - DPP 01',subject:'Physics',chapter:'Kinematics',source:'DPP'},
-  {name:'Motion in a plane - DPP 02',subject:'Physics',chapter:'Kinematics',source:'DPP'},
-  {name:'Motion in a plane - DPP 03',subject:'Physics',chapter:'Kinematics',source:'DPP'},
-  {name:'Motion in a plane - DPP 04',subject:'Physics',chapter:'Kinematics',source:'DPP'},
-  {name:'Motion in a plane - Assignment 01',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
-  {name:'Motion in a plane - Assignment 02',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
-  {name:'Motion in a plane - Assignment 03',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
-  {name:'Motion in a plane - Assignment 04',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
-  {name:'Motion in a straight line - Assignment 01',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
-  {name:'Motion in a straight line - Assignment 02',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
-  {name:'Motion in a straight line - Assignment 03',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
-  {name:'Motion in a straight line - Assignment 04',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
-  {name:'Motion in a straight line - Assignment 05',subject:'Physics',chapter:'Kinematics',source:'PW Assignment'},
-  {name:'NLM - KPP-22',subject:'Physics',chapter:'Laws of Motion',source:'KPP'},
-  {name:'NLM - KPP-23',subject:'Physics',chapter:'Laws of Motion',source:'KPP'},
-  {name:"Newton's Laws of Motion - KPP-24",subject:'Physics',chapter:'Laws of Motion',source:'KPP'},
-  {name:'Laws of motion - DPP 01',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
-  {name:'Laws of motion - DPP 02',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
-  {name:'Laws of motion - DPP 03',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
-  {name:'Laws of motion - DPP 04',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
-  {name:'Laws of motion - DPP 05',subject:'Physics',chapter:'Laws of Motion',source:'DPP'},
-  {name:'Current Electricity - KPP-61',subject:'Physics',chapter:'Current Electricity',source:'KPP'},
-  {name:'Current Electricity - KPP-62',subject:'Physics',chapter:'Current Electricity',source:'KPP'},
-  {name:'Current Electricity - KPP-63',subject:'Physics',chapter:'Current Electricity',source:'KPP'},
-  {name:'Moving Charges and Magnetism - Assignment 01',subject:'Physics',chapter:'Moving Charges and Magnetism',source:'PW Assignment'},
-  {name:'Moving Charges and Magnetism - Assignment 02',subject:'Physics',chapter:'Moving Charges and Magnetism',source:'PW Assignment'},
-  {name:'Moving Charges and Magnetism - KPP-66',subject:'Physics',chapter:'Moving Charges and Magnetism',source:'KPP'},
-  {name:'Moving Charges and Magnetism - KPP-67',subject:'Physics',chapter:'Moving Charges and Magnetism',source:'KPP'},
-
-  // ===== Common books (sirf ek baar) =====
-  {name:'Physics errorless E Book',subject:'Physics',chapter:'',source:'Other'},
-  {name:'HCV Volume 1',subject:'Physics',chapter:'',source:'Other'},
-  {name:'Allen complete PHYSICS',subject:'Physics',chapter:'',source:'Allen Module'},
-  {name:'ALLEN NEET PYQ UPTO 2025',subject:'Physics',chapter:'',source:'PYQ Sheet'},
-  {name:'ALLEN PHYSICS CLASS 11TH 2026 MODULE',subject:'Physics',chapter:'',source:'Allen Module'},
-  {name:'Physics Chapterwise Analysis NEET',subject:'Physics',chapter:'',source:'PYQ Sheet'},
-  {name:'PHYSICS JEE MAIN PYQ',subject:'Physics',chapter:'',source:'JEE Mains Sheet'},
-  {name:'PHYSICS NEET PYQ',subject:'Physics',chapter:'',source:'PYQ Sheet'},
-  {name:'Mr physics',subject:'Physics',chapter:'',source:'MR*'},
-  {name:'Physics some advance book',subject:'Physics',chapter:'',source:'Other'},
-  {name:'Final revision KPP',subject:'Physics',chapter:'',source:'KPP'},
-  {name:'Module section',subject:'Physics',chapter:'',source:'Allen Module'},
-
-  // ===== Chemistry =====
-  {name:'SOME BASIC CONCEPT of organic chemistry',subject:'Chemistry',chapter:'Some Basic Principles of Organic Chemistry',source:'KPP'},
-  {name:'Hydrocarbon',subject:'Chemistry',chapter:'Hydrocarbons',source:'KPP'},
-  {name:'Haloalkenes and Haloarenes',subject:'Chemistry',chapter:'Haloalkanes and Haloarenes',source:'KPP'},
-  {name:'Alcohol,phenol and Ether',subject:'Chemistry',chapter:'Alcohols, Phenols and Ethers',source:'KPP'},
-  {name:'Aldehyde, ketone and carboxylic acid',subject:'Chemistry',chapter:'Aldehydes, Ketones and Carboxylic Acids',source:'KPP'},
-  {name:'Biomolecules',subject:'Chemistry',chapter:'Biomolecules',source:'KPP'},
-  {name:'Amines',subject:'Chemistry',chapter:'Amines',source:'KPP'},
-  {name:'practical chemistry',subject:'Chemistry',chapter:'Practical Chemistry',source:'Other'},
-  {name:'ERRORLESS CHEMISTRY',subject:'Chemistry',chapter:'',source:'Other'},
-  {name:'ALLEN CHEMISTRY MODULES 2026',subject:'Chemistry',chapter:'',source:'Allen Module'},
-  {name:'Chemistry at a Glance - Allen 2021',subject:'Chemistry',chapter:'',source:'Allen Module'},
-  {name:'Chemistry Chapterwise Analysis NEET',subject:'Chemistry',chapter:'',source:'PYQ Sheet'},
-
-  // ===== Biology / Modules / Tests =====
-  {name:'BOTANY ALLEN MODULE',subject:'Biology',chapter:'',source:'Allen Module'},
-  {name:'ZOOLOGY ALLEN MODULE',subject:'Biology',chapter:'',source:'Allen Module'},
-  {name:'BIOLOGY SHORTS NOTES',subject:'Biology',chapter:'',source:'Self Notes'},
-  {name:'BIOLOGY STUDY MATERIAL',subject:'Biology',chapter:'',source:'Other'},
-  {name:'BIOLOGY NCERT',subject:'Biology',chapter:'',source:'NCERT Exemplar'},
-  {name:'Biology pyq',subject:'Biology',chapter:'',source:'PYQ Sheet'},
-  {name:'BIOLOGY UMEED DPP',subject:'Biology',chapter:'',source:'DPP'},
-  {name:'Biology dictionary',subject:'Biology',chapter:'',source:'Self Notes'},
-  {name:'Complete Biology',subject:'Biology',chapter:'',source:'Complete Biology'},
-  {name:'NCERT PUNCH',subject:'Biology',chapter:'',source:'NCERT PUNCH'},
-  {name:'ALLEN STUDY MATERIAL',subject:'Biology',chapter:'',source:'Allen Module'},
-  {name:'ALLEN Major test',subject:'Biology',chapter:'',source:'Coaching Test'},
-  {name:'AAKASH TEST',subject:'Biology',chapter:'',source:'Coaching Test'},
-  {name:'Aakash AIATs',subject:'Biology',chapter:'',source:'Coaching Test'},
-  {name:'Aakash Major test series',subject:'Biology',chapter:'',source:'Coaching Test'},
-  {name:'Pyq section',subject:'Biology',chapter:'',source:'PYQ Sheet'},
-  {name:'EXTRA KNOWLEDGE',subject:'Biology',chapter:'',source:'Other'},
-  {name:'NCERT BOOK',subject:'Biology',chapter:'',source:'NCERT Exemplar'}
-];
-
-window.importReaderaSheets=()=>{
-  db.sheets=db.sheets||[];
-  const existing=new Set(db.sheets.map(s=>(s.name||'').trim().toLowerCase()));
-  let added=0;
-  for(const item of READERA_SHEET_SEED){
-    const key=(item.name||'').trim().toLowerCase();
-    if(!key||existing.has(key))continue;
-    db.sheets.push({
-      id:crypto.randomUUID(),
-      name:item.name,
-      subject:item.subject||'Physics',
-      chapter:item.chapter||'',
-      source:item.source||'',
-      totalQs:0,
-      notes:'Imported from Readera list',
-      status:'not_started',
-      createdAt:today(),
-      lastPracticed:null,
-      logs:[]
-    });
-    existing.add(key);
-    added++;
-  }
-  save();
-  sheetFilter='All';
-  sheetSubjectFilter='All';
-  activeSheetId=null;
-  render();
-  toast(added?`${added} sheets add ho gaye ✅ — ab total Q update kar lena`:'Saari sheets pehle se maujood hain.');
-};
-
 function sheetTotals(s){
   const logs=Array.isArray(s.logs)?s.logs:[];
   const attempted=logs.reduce((a,l)=>a+(+l.attempted||0),0);
@@ -3820,11 +3679,8 @@ function sheetTracker(){
 
   <div class="section-head">
     <h2>Practice Sheets</h2>
-    <div class="actions">
-      <button type="button" class="btn secondary" onclick="importReaderaSheets()">⬇ Import Readera list</button>
-    </div>
+    <small>Readera + yahan log = full tracking</small>
   </div>
-  <p class="muted" style="font-size:11px;margin:-6px 0 12px;line-height:1.5">Readera collections se Physics / Chemistry / Biology sheets ek click mein add. Total questions baad mein edit kar lena.</p>
 
   <div class="tabs four" style="margin-bottom:12px">
     <button type="button" class="tab ${sheetFilter==='All'?'active':''}" onclick="setSheetFilter('All')">All <b>${totalSheets}</b></button>
@@ -3880,17 +3736,8 @@ function sheetTracker(){
             <option>Allen Module</option>
             <option>Aakash Package</option>
             <option>PW Module</option>
-            <option>PW Assignment</option>
-            <option>DPP</option>
-            <option>KPP</option>
-            <option>NCERT PUNCH</option>
-            <option>NCERT Exemplar</option>
-            <option>MR*</option>
-            <option>MTG</option>
-            <option>Katter sheet</option>
-            <option>JEE Mains Sheet</option>
-            <option>Complete Biology</option>
             <option>PYQ Sheet</option>
+            <option>NCERT Exemplar</option>
             <option>Coaching Test</option>
             <option>Physical Book</option>
             <option>Self Notes</option>
