@@ -22,6 +22,7 @@ const seed=()=>({
   quizzes:[],
   quizAttempts:[],
   upcomingTests:[],
+  sheets:[],
   settings:{name:'IGRIS',currentRank:'4 Lakh',upcomingRank:'10k',geminiKey:'',notifyEnabled:true,soundEnabled:true,theme:'light',dailyGoals:{mins:120,qs:40,missions:3},timerWall:'soft'}
 });
 
@@ -40,6 +41,7 @@ let quizReview=new Set(); // question ids marked for review in active quiz
 let mistakeTypeFilter='All';
 let mistakeSubjectFilter='All';
 let quizPaceLeft=0, quizPaceInterval=null;
+let sheetFilter='All', sheetSubjectFilter='All', activeSheetId=null, sheetLogOpen=false;
 
 const SAMPLE_JSON=JSON.stringify([
   {
@@ -91,6 +93,7 @@ function load(){
     merged.tasks=Array.isArray(merged.tasks)?merged.tasks:[];
     merged.sessions=Array.isArray(merged.sessions)?merged.sessions:[];
     merged.mistakes=Array.isArray(merged.mistakes)?merged.mistakes:[];
+    merged.sheets=Array.isArray(merged.sheets)?merged.sheets:[];
     const bucketQuizzes=loadQuizzesBucket(parsed.quizzes);
     merged.quizzes=bucketQuizzes.length?bucketQuizzes:(Array.isArray(parsed.quizzes)?parsed.quizzes:[]);
     if(Array.isArray(parsed.quizzes)&&parsed.quizzes.length&&localStorage.getItem(QUIZ_KEY)===null){
@@ -3513,9 +3516,255 @@ function mockLabView(){
   </div>`;
 }
 
+/* ===== Practice Sheet Tracker ===== */
+function sheetTotals(s){
+  const logs=Array.isArray(s.logs)?s.logs:[];
+  const attempted=logs.reduce((a,l)=>a+(+l.attempted||0),0);
+  const correct=logs.reduce((a,l)=>a+(+l.correct||0),0);
+  const wrong=logs.reduce((a,l)=>a+(+l.wrong||0),0);
+  const mins=logs.reduce((a,l)=>a+(+l.timeMins||0),0);
+  const total=Math.max(0,+s.totalQs||0);
+  const accuracy=attempted?correct/attempted:0;
+  let status=s.status||'not_started';
+  if(logs.length && status==='not_started')status='in_progress';
+  if(total>0 && attempted>=total)status='completed';
+  if(s.status==='completed')status='completed';
+  return {attempted,correct,wrong,mins,total,accuracy,status,logs};
+}
+function sheetStatusTag(st){
+  if(st==='completed')return '<span class="tag green">Completed</span>';
+  if(st==='in_progress')return '<span class="tag gold">In Progress</span>';
+  return '<span class="tag">Not Started</span>';
+}
+window.setSheetFilter=v=>{sheetFilter=v;activeSheetId=null;sheetLogOpen=false;render()};
+window.setSheetSubjectFilter=v=>{sheetSubjectFilter=v;activeSheetId=null;sheetLogOpen=false;render()};
+window.openSheet=id=>{activeSheetId=id;sheetLogOpen=false;render()};
+window.closeSheetDetail=()=>{activeSheetId=null;sheetLogOpen=false;render()};
+window.toggleSheetLogForm=()=>{sheetLogOpen=!sheetLogOpen;render()};
+window.markSheetCompleted=id=>{
+  const s=(db.sheets||[]).find(x=>x.id===id);
+  if(!s)return;
+  s.status='completed';
+  save();render();
+  toast('Sheet marked completed ✅');
+};
+window.deleteSheet=id=>{
+  if(!confirm('Delete this sheet and all its practice logs?'))return;
+  db.sheets=(db.sheets||[]).filter(x=>x.id!==id);
+  if(activeSheetId===id)activeSheetId=null;
+  save();render();
+  toast('Sheet removed.');
+};
+window.deleteSheetLog=(sheetId,logId)=>{
+  const s=(db.sheets||[]).find(x=>x.id===sheetId);
+  if(!s||!Array.isArray(s.logs))return;
+  s.logs=s.logs.filter(l=>l.id!==logId);
+  save();render();
+  toast('Log removed.');
+};
+window.setSheetStatus=(id,status)=>{
+  const s=(db.sheets||[]).find(x=>x.id===id);
+  if(!s)return;
+  s.status=status;
+  save();render();
+};
+
+function sheetTracker(){
+  title('Sheet Tracker');
+  db.sheets=db.sheets||[];
+  const all=db.sheets.slice().sort((a,b)=>{
+    const ta=sheetTotals(a),tb=sheetTotals(b);
+    const order={in_progress:0,not_started:1,completed:2};
+    return (order[ta.status]??9)-(order[tb.status]??9) || (b.lastPracticed||'').localeCompare(a.lastPracticed||'');
+  });
+
+  let list=all;
+  if(sheetSubjectFilter!=='All')list=list.filter(s=>s.subject===sheetSubjectFilter);
+  if(sheetFilter==='untouched')list=list.filter(s=>sheetTotals(s).status==='not_started');
+  else if(sheetFilter==='progress')list=list.filter(s=>sheetTotals(s).status==='in_progress');
+  else if(sheetFilter==='done')list=list.filter(s=>sheetTotals(s).status==='completed');
+
+  const totalSheets=all.length;
+  const untouched=all.filter(s=>sheetTotals(s).status==='not_started').length;
+  const inProg=all.filter(s=>sheetTotals(s).status==='in_progress').length;
+  const done=all.filter(s=>sheetTotals(s).status==='completed').length;
+  const totalAttempted=all.reduce((a,s)=>a+sheetTotals(s).attempted,0);
+  const totalCorrect=all.reduce((a,s)=>a+sheetTotals(s).correct,0);
+  const overallAcc=totalAttempted?Math.round(totalCorrect/totalAttempted*100):0;
+
+  // Detail view of one sheet
+  if(activeSheetId){
+    const s=all.find(x=>x.id===activeSheetId);
+    if(!s){activeSheetId=null;return sheetTracker()}
+    const t=sheetTotals(s);
+    const logs=[...(s.logs||[])].reverse();
+    return `
+    <div class="section-head">
+      <div>
+        <button type="button" class="btn ghost" style="padding:4px 10px;margin-bottom:6px" onclick="closeSheetDetail()">← All Sheets</button>
+        <h2 style="margin:0">${esc(s.name)}</h2>
+        <small>${esc(s.subject||'')} ${s.chapter?'• '+esc(s.chapter):''} ${s.source?'• '+esc(s.source):''}</small>
+      </div>
+      <div class="actions">
+        ${sheetStatusTag(t.status)}
+        ${t.status!=='completed'?`<button type="button" class="btn secondary" onclick="markSheetCompleted('${s.id}')">Mark Completed</button>`:''}
+        <button type="button" class="btn danger" onclick="deleteSheet('${s.id}')">Delete</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      ${stat('ATTEMPTED',t.attempted,t.total?`of ${t.total} Q`:'logged')}
+      ${stat('CORRECT',t.correct,t.attempted?Math.round(t.accuracy*100)+'% acc':'—')}
+      ${stat('WRONG',t.wrong,'need revision')}
+      ${stat('TIME',t.mins?t.mins+'m':'—',`${logs.length} session${logs.length!==1?'s':''}`)}
+    </div>
+
+    ${t.total?progress('PROGRESS (attempted / total)',Math.min(t.attempted,t.total),t.total):''}
+
+    <div class="card" style="margin-top:14px">
+      <div class="section-head" style="margin:0 0 10px">
+        <h3 style="margin:0">Practice Logs</h3>
+        <button type="button" class="btn" onclick="toggleSheetLogForm()">${sheetLogOpen?'Hide form':'＋ Log Session'}</button>
+      </div>
+      ${sheetLogOpen?`
+      <form id="sheetLogForm" style="margin-bottom:16px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)">
+        <input type="hidden" name="sheetId" value="${s.id}">
+        <div class="form-grid">
+          <div class="field"><label>DATE</label><input name="date" type="date" value="${today()}" required></div>
+          <div class="field"><label>TIME (MINUTES)</label><input name="timeMins" type="number" min="0" value="30"></div>
+          <div class="field"><label>ATTEMPTED</label><input name="attempted" type="number" min="0" required placeholder="40"></div>
+          <div class="field"><label>CORRECT</label><input name="correct" type="number" min="0" required placeholder="28"></div>
+          <div class="field"><label>WRONG</label><input name="wrong" type="number" min="0" value="0"></div>
+          <div class="field"><label>SKIPPED (optional)</label><input name="skipped" type="number" min="0" value="0"></div>
+        </div>
+        <div class="field"><label>WRONG Q NUMBERS (optional)</label><input name="wrongNumbers" placeholder="12, 18, 23, 41"></div>
+        <div class="field"><label>NOTE (optional)</label><textarea name="note" rows="2" placeholder="Silly mistakes in numericals..."></textarea></div>
+        <button class="btn" type="submit">Save Log</button>
+      </form>`:''}
+      ${logs.length?logs.map(l=>`
+        <div class="list-item">
+          <div>
+            <b>${esc(l.date)}</b>
+            <div class="muted" style="font-size:11px;margin-top:2px">
+              ${l.attempted} attempted · ${l.correct} correct · ${l.wrong||0} wrong
+              ${l.timeMins?` · ${l.timeMins}m`:''}
+              ${l.wrongNumbers?`<br><span style="color:var(--red)">Wrong Q: ${esc(l.wrongNumbers)}</span>`:''}
+              ${l.note?`<br>${esc(l.note)}`:''}
+            </div>
+          </div>
+          <button type="button" class="icon-btn" onclick="deleteSheetLog('${s.id}','${l.id}')">×</button>
+        </div>`).join(''):'<div class="empty">Abhi koi log nahi. Upar se “Log Session” dabao — paper/PDF pe practice karke numbers yahan daal do.</div>'}
+    </div>
+
+    ${s.fileId||s.link?`
+    <div class="card" style="margin-top:14px">
+      <h3>Linked material</h3>
+      <p class="muted" style="font-size:12px">${s.fileName?esc(s.fileName):esc(s.link||'')}</p>
+      <div class="actions" style="margin-top:8px">
+        ${s.fileId?`<button type="button" class="btn secondary" onclick="previewFile('${s.fileId}')">Open in Vault preview</button>`:''}
+        ${s.link?`<a class="btn secondary" href="${esc(s.link)}" target="_blank" rel="noopener">Open link</a>`:''}
+      </div>
+    </div>`:''}
+    `;
+  }
+
+  // List view
+  return `
+  <div class="stats">
+    ${stat('SHEETS',totalSheets,`${untouched} untouched`)}
+    ${stat('IN PROGRESS',inProg,'active')}
+    ${stat('COMPLETED',done,totalSheets?Math.round(done/totalSheets*100)+'%':'—')}
+    ${stat('Q LOGGED',totalAttempted,overallAcc?overallAcc+'% acc':'no data')}
+  </div>
+
+  <div class="section-head">
+    <h2>Practice Sheets</h2>
+    <small>Readera + yahan log = full tracking</small>
+  </div>
+
+  <div class="tabs four" style="margin-bottom:12px">
+    <button type="button" class="tab ${sheetFilter==='All'?'active':''}" onclick="setSheetFilter('All')">All <b>${totalSheets}</b></button>
+    <button type="button" class="tab ${sheetFilter==='untouched'?'active':''}" onclick="setSheetFilter('untouched')">Untouched <b>${untouched}</b></button>
+    <button type="button" class="tab ${sheetFilter==='progress'?'active':''}" onclick="setSheetFilter('progress')">In Progress <b>${inProg}</b></button>
+    <button type="button" class="tab ${sheetFilter==='done'?'active':''}" onclick="setSheetFilter('done')">Done <b>${done}</b></button>
+  </div>
+
+  <div class="actions" style="margin-bottom:14px;flex-wrap:wrap">
+    <select onchange="setSheetSubjectFilter(this.value)" style="max-width:160px">
+      <option value="All" ${sheetSubjectFilter==='All'?'selected':''}>All Subjects</option>
+      <option value="Physics" ${sheetSubjectFilter==='Physics'?'selected':''}>Physics</option>
+      <option value="Chemistry" ${sheetSubjectFilter==='Chemistry'?'selected':''}>Chemistry</option>
+      <option value="Biology" ${sheetSubjectFilter==='Biology'?'selected':''}>Biology</option>
+    </select>
+  </div>
+
+  ${list.length?`<div class="card" style="padding:0 17px">
+    ${list.map(s=>{
+      const t=sheetTotals(s);
+      const pct=t.total?Math.min(100,Math.round(t.attempted/t.total*100)):0;
+      return `<div class="list-item" style="cursor:pointer" onclick="openSheet('${s.id}')">
+        <div style="min-width:0;flex:1">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <b>${esc(s.name)}</b>
+            ${sheetStatusTag(t.status)}
+            ${s.source?`<span class="tag blue">${esc(s.source)}</span>`:''}
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:3px">
+            ${esc(s.subject||'')} ${s.chapter?'• '+esc(s.chapter):''}
+            ${t.attempted?` · ${t.attempted}${t.total?'/'+t.total:''} Q · ${Math.round(t.accuracy*100)}%`:' · not started'}
+            ${s.lastPracticed?` · last ${esc(s.lastPracticed)}`:''}
+          </div>
+          ${t.total?`<div class="bar" style="margin-top:6px;max-width:220px"><span style="width:${pct}%"></span></div>`:''}
+        </div>
+        <span style="color:var(--muted);font-size:18px">›</span>
+      </div>`;
+    }).join('')}
+  </div>`:`<div class="card"><div class="empty">${sheetFilter!=='All'||sheetSubjectFilter!=='All'?'Is filter mein koi sheet nahi.':'Abhi koi sheet nahi. Neeche se pehli sheet add karo — physical book ho ya PDF, dono chalega.'}</div></div>`}
+
+  <div class="card" style="margin-top:16px">
+    <h3>＋ Add Practice Sheet</h3>
+    <p class="muted" style="font-size:12px;line-height:1.6;margin:0 0 12px">
+      PDF / module / physical book — sab add kar sakte ho. File upload optional hai.
+      Readera mein practice karo, yahan sirf numbers log karo.
+    </p>
+    <form id="sheetForm">
+      <div class="form-grid">
+        <div class="field"><label>SHEET NAME *</label><input name="name" required placeholder="Allen Module – Ray Optics / Aakash Package Ch-8"></div>
+        <div class="field"><label>SOURCE</label>
+          <select name="source">
+            <option value="">— Select —</option>
+            <option>Allen Module</option>
+            <option>Aakash Package</option>
+            <option>PW Module</option>
+            <option>PYQ Sheet</option>
+            <option>NCERT Exemplar</option>
+            <option>Coaching Test</option>
+            <option>Physical Book</option>
+            <option>Self Notes</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="field"><label>SUBJECT *</label>
+          <select name="subject" required>
+            <option value="Physics">Physics</option>
+            <option value="Chemistry">Chemistry</option>
+            <option value="Biology">Biology</option>
+          </select>
+        </div>
+        <div class="field"><label>CHAPTER (optional)</label><input name="chapter" placeholder="Ray Optics and Optical Instruments"></div>
+        <div class="field"><label>TOTAL QUESTIONS (approx)</label><input name="totalQs" type="number" min="0" placeholder="120"></div>
+        <div class="field"><label>EXTERNAL LINK (optional)</label><input name="link" type="url" placeholder="https://..."></div>
+      </div>
+      <div class="field"><label>NOTES (optional)</label><textarea name="notes" rows="2" placeholder="Page 45-78 / High yield / First time..."></textarea></div>
+      <button class="btn" type="submit">Add Sheet</button>
+    </form>
+  </div>
+  `;
+}
+
 function render(){
   try{
-    const views={dashboard,missions,subjects,focus,practice:practiceView,analysis:analysisView,mistakes,revision,tests,mocklab:mockLabView,vault,aitutor:aiTutorView,analytics};
+    const views={dashboard,missions,subjects,focus,practice:practiceView,analysis:analysisView,mistakes,revision,tests,mocklab:mockLabView,vault,aitutor:aiTutorView,analytics,sheets:sheetTracker};
     const fn=views[current]||dashboard;
     const html=fn();
     const viewEl=document.getElementById('view');
@@ -3638,6 +3887,57 @@ function bindForms(){
     db.mockLabs.push(paper);
     mockLabFocusId=paper.id;
     save();render();toast('Mock Lab paper saved.');
+  });
+  bind('sheetForm',f=>{
+    const link=(f.link?.value||'').trim();
+    if(link&&!/^https?:\/\//i.test(link)){toast('Link http:// ya https:// se shuru hona chahiye.');return}
+    const totalQs=parseInt(f.totalQs?.value,10);
+    db.sheets=db.sheets||[];
+    db.sheets.push({
+      id:crypto.randomUUID(),
+      name:f.name.value.trim(),
+      subject:f.subject.value,
+      chapter:(f.chapter?.value||'').trim(),
+      source:(f.source?.value||'').trim(),
+      totalQs:totalQs>0?totalQs:0,
+      notes:(f.notes?.value||'').trim(),
+      link:link||undefined,
+      status:'not_started',
+      createdAt:today(),
+      lastPracticed:null,
+      logs:[]
+    });
+    save();
+    sheetFilter='All';
+    render();
+    toast('Sheet added ✅ — ab practice karke log karo.');
+  });
+  bind('sheetLogForm',f=>{
+    const sheetId=f.sheetId?.value;
+    const s=(db.sheets||[]).find(x=>x.id===sheetId);
+    if(!s){toast('Sheet not found');return}
+    const attempted=Math.max(0,parseInt(f.attempted.value,10)||0);
+    const correct=Math.max(0,parseInt(f.correct.value,10)||0);
+    const wrong=Math.max(0,parseInt(f.wrong.value,10)||0);
+    const skipped=Math.max(0,parseInt(f.skipped?.value,10)||0);
+    const timeMins=Math.max(0,parseInt(f.timeMins?.value,10)||0);
+    if(attempted<1){toast('Attempted at least 1 hona chahiye.');return}
+    if(correct+wrong>attempted){toast('Correct + Wrong attempted se zyada nahi ho sakte.');return}
+    s.logs=s.logs||[];
+    s.logs.push({
+      id:crypto.randomUUID(),
+      date:f.date.value||today(),
+      attempted,correct,wrong,skipped,timeMins,
+      wrongNumbers:(f.wrongNumbers?.value||'').trim(),
+      note:(f.note?.value||'').trim()
+    });
+    s.lastPracticed=f.date.value||today();
+    if(s.status==='not_started')s.status='in_progress';
+    const t=sheetTotals(s);
+    if(t.total>0 && t.attempted>=t.total)s.status='completed';
+    sheetLogOpen=false;
+    save();render();
+    toast(`Logged: ${correct}/${attempted} correct (${Math.round(correct/attempted*100)}%)`);
   });
 }
 
