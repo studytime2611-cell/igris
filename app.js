@@ -1,4 +1,5 @@
 const KEY='igris-neet-v1';
+const QUIZ_KEY='igris-neet-v1-quizzes';
 const BASE_TITLE='IGRIS — NEET Command Center';
 const MISSION_TYPES=['Practice','Revision','Lecture'];
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
@@ -25,7 +26,7 @@ const seed=()=>({
 });
 
 let db=load(), current='dashboard', missionTab='open', mistakeTab='open', practiceTab='quiz', trackTab='Physics', strengthFilter='All', vaultFilter='All', attemptChapterFilter='All', selectedQuizSubject=null, analysisTab='Physics';
-let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null, quizClockInterval=null, reminderInterval=null;
+let timerSeconds=25*60, timerInitial=25*60, timerRunning=false, timerInterval=null, clockInterval=null, quizClockInterval=null, reminderInterval=null, toastTimer=null;
 let activeQuiz=null, activeQuizMeta={subject:'All',chapter:'All'}, quizIdx=0, quizScore=0, quizAnswered=false, quizPickedIdx=null, quizWrongList=[], quizElapsedSec=0, retestIdx=0, aiOutput='';
 let quizAnswers={};
 let topBannerHidden=false, activeReminderTaskId=null;
@@ -61,6 +62,23 @@ const SAMPLE_JSON=JSON.stringify([
   }
 ],null,2);
 
+function loadQuizzesBucket(fallback=[]){
+  try{
+    const raw=localStorage.getItem(QUIZ_KEY);
+    if(raw!==null){
+      const parsed=JSON.parse(raw);
+      return Array.isArray(parsed)?parsed:[];
+    }
+  }catch(_){}
+  return Array.isArray(fallback)?fallback:[];
+}
+function saveQuizzesBucket(list){
+  try{
+    localStorage.setItem(QUIZ_KEY,JSON.stringify(Array.isArray(list)?list:[]));
+  }catch(e){
+    console.warn('quiz save failed',e);
+  }
+}
 function load(){
   try{
     const parsed=JSON.parse(localStorage.getItem(KEY)||'{}');
@@ -73,17 +91,33 @@ function load(){
     merged.tasks=Array.isArray(merged.tasks)?merged.tasks:[];
     merged.sessions=Array.isArray(merged.sessions)?merged.sessions:[];
     merged.mistakes=Array.isArray(merged.mistakes)?merged.mistakes:[];
-    merged.quizzes=Array.isArray(merged.quizzes)?merged.quizzes:[];
+    const bucketQuizzes=loadQuizzesBucket(parsed.quizzes);
+    merged.quizzes=bucketQuizzes.length?bucketQuizzes:(Array.isArray(parsed.quizzes)?parsed.quizzes:[]);
+    if(Array.isArray(parsed.quizzes)&&parsed.quizzes.length&&localStorage.getItem(QUIZ_KEY)===null){
+      saveQuizzesBucket(merged.quizzes);
+    }
     merged.topics=merged.topics&&typeof merged.topics==='object'?merged.topics:{};
     return merged;
   }catch(e){return seed()}
 }
 function save(){
-  try{localStorage.setItem(KEY,JSON.stringify(db))}
+  try{
+    const quizzesCopy=Array.isArray(db.quizzes)?db.quizzes:[];
+    saveQuizzesBucket(quizzesCopy);
+    const slimDb={...db,quizzes:[]};
+    localStorage.setItem(KEY,JSON.stringify(slimDb));
+  }
   catch(e){console.warn('save failed',e);try{toast('Storage full — export backup / clear old quizzes.')}catch(_){}}
 }
 function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function toast(s){let t=document.getElementById('toast');if(!t)return;t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2300)}
+function toast(s){
+  let t=document.getElementById('toast');
+  if(!t)return;
+  t.textContent=s;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>t.classList.remove('show'),2300);
+}
 function dateText(d=today()){return new Date(d+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})}
 
 const SFX={ohno:'sfx-ohno.mp3',aachi:'sfx-aachi.mp3',sparkle:'sfx-sparkle.wav',guitar:'sfx-guitar.wav'};
@@ -489,20 +523,15 @@ function openFilesDB(){
 }
 async function storeFile(file){
   const id=crypto.randomUUID();
-  const dataUrl=await new Promise((res,rej)=>{
-    const r=new FileReader();
-    r.onload=()=>res(r.result);
-    r.onerror=()=>rej(r.error);
-    r.readAsDataURL(file);
-  });
+  const blob=file instanceof Blob?file:new Blob([file],{type:file?.type||'application/octet-stream'});
   const idb=await openFilesDB();
   await new Promise((res,rej)=>{
     const tx=idb.transaction(STORE_NAME,'readwrite');
-    tx.objectStore(STORE_NAME).put({id,name:file.name,type:file.type,dataUrl});
+    tx.objectStore(STORE_NAME).put({id,name:file.name,type:file.type||blob.type,blob});
     tx.oncomplete=res;
     tx.onerror=()=>rej(tx.error);
   });
-  return {id,name:file.name,type:file.type};
+  return {id,name:file.name,type:file.type||blob.type};
 }
 async function getStoredFile(id){
   const idb=await openFilesDB();
@@ -515,21 +544,38 @@ async function getStoredFile(id){
 }
 async function deleteStoredFile(id){
   if(!id)return;
-  const idb=await openFilesDB();
-  const tx=idb.transaction(STORE_NAME,'readwrite');
-  tx.objectStore(STORE_NAME).delete(id);
+  try{
+    const idb=await openFilesDB();
+    await new Promise((res,rej)=>{
+      const tx=idb.transaction(STORE_NAME,'readwrite');
+      tx.objectStore(STORE_NAME).delete(id);
+      tx.oncomplete=res;
+      tx.onerror=()=>rej(tx.error);
+    });
+  }catch(_){}
 }
-let previewToken=0, previewPdf=null, previewObserver=null;
-async function blobOfRec(rec){return (await fetch(rec.dataUrl)).blob()}
+let previewToken=0, previewPdf=null, previewObserver=null, activePreviewUrl=null;
+function revokePreviewUrl(){
+  if(activePreviewUrl){
+    try{URL.revokeObjectURL(activePreviewUrl)}catch(_){}
+    activePreviewUrl=null;
+  }
+}
+async function blobOfRec(rec){
+  if(rec&&rec.blob instanceof Blob)return rec.blob;
+  if(rec&&rec.dataUrl)return (await fetch(rec.dataUrl)).blob();
+  throw new Error('Empty file record');
+}
 window.downloadStoredFile=async id=>{
   const rec=await getStoredFile(id);
   if(!rec){toast('File not found.');return}
   const blob=await blobOfRec(rec);
+  const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
+  a.href=url;
   a.download=rec.name;
   document.body.appendChild(a);a.click();a.remove();
-  setTimeout(()=>URL.revokeObjectURL(a.href),60000);
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
   toast('Download ho gaya — ReadEra / Files se khol lo.');
 };
 window.shareStoredFile=async id=>{
@@ -602,16 +648,18 @@ async function renderPdfInto(container,blob,token){
 window.previewFile=async(fileId)=>{
   const rec=await getStoredFile(fileId);
   if(!rec){toast('File not found in local vault.');return}
+  revokePreviewUrl();
   const token=++previewToken;
   document.getElementById('previewTitle').textContent=rec.name;
   const body=document.getElementById('previewBody');
   const isPdf=rec.type==='application/pdf'||/\.pdf$/i.test(rec.name||'');
+  const blob=await blobOfRec(rec);
+  const imgSrc=isPdf?'':(activePreviewUrl=URL.createObjectURL(blob));
   body.innerHTML=`<div class="preview-actions"><button type="button" class="btn" onclick="shareStoredFile('${fileId}')">📤 Open with… (ReadEra / Drive)</button><button type="button" class="btn secondary" onclick="downloadStoredFile('${fileId}')">⬇ Download</button></div>`
-    +(isPdf?'<div id="pdfPages" class="pdf-pages"><div class="muted" style="font-size:11px;padding:20px">PDF load ho rahi hai…</div></div>':`<img src="${rec.dataUrl}" alt="${esc(rec.name)}">`);
+    +(isPdf?'<div id="pdfPages" class="pdf-pages"><div class="muted" style="font-size:11px;padding:20px">PDF load ho rahi hai…</div></div>':`<img src="${imgSrc}" alt="${esc(rec.name)}">`);
   document.getElementById('previewModal').classList.add('open');
   if(isPdf){
     try{
-      const blob=await blobOfRec(rec);
       await renderPdfInto(document.getElementById('pdfPages'),blob,token);
     }catch(e){
       if(token===previewToken){
@@ -623,6 +671,7 @@ window.previewFile=async(fileId)=>{
 };
 window.closePreview=()=>{
   previewToken++;
+  revokePreviewUrl();
   if(previewObserver){previewObserver.disconnect();previewObserver=null}
   if(previewPdf){try{previewPdf.destroy()}catch(_){}previewPdf=null}
   document.getElementById('previewModal').classList.remove('open');
@@ -2743,7 +2792,7 @@ function revision(){
     <div class="section-head" style="margin-top:0"><h3>Due Today (${dueToday.length})</h3><span class="tag gold">SPACED DUE</span></div>
     ${dueToday.length?dueToday.map(r=>revDueRowHTML(r,false)).join(''):'<div class="empty">Aaj koi revision due nahi.</div>'}
   </div>
-  <div class="two-col"><div class="card"><h3>Log a revision session</h3><form id="revisionForm"><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="e.g. Human Reproduction"></div><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div><div class="field"><label>REVISION TYPE</label><select name="kind"><option>Short notes</option><option>NCERT</option><option>Active recall</option><option>Questions / PYQs</option><option>Full chapter</option></select></div></div><button class="btn">Save revision</button></form></div><div class="card"><h3>Revision history</h3>${hist.length?hist.slice(0,60).map(r=>{const rec=db.revisions.find(x=>x.chapter===r.chapter&&x.date===r.date);const p=rec?revisionPending(rec):null;const isRed=p&&p.state==='red';return `<div class="list-item" style="align-items:flex-start"><div><b>${esc(r.chapter)}</b> ${isRed?'<span class="tag red">RED ZONE ☠️</span>':''}<div class="muted" style="margin:3px 0 5px">${esc(r.subject)} • ${esc(r.kind)}</div>${rec?revChipsHTML(rec):''}</div><span>${shortDate(r.date)}</span></div>`}).join(''):'<div class="empty">Your revision history will appear here.</div>'}</div></div>`;
+  <div class="two-col"><div class="card"><h3>Log a revision session</h3><form id="revisionForm"><div class="field"><label>CHAPTER / TOPIC</label><input name="chapter" required placeholder="e.g. Human Reproduction"></div><div class="form-grid"><div class="field"><label>SUBJECT</label><select name="subject"><option>Biology</option><option>Chemistry</option><option>Physics</option></select></div><div class="field"><label>REVISION TYPE</label><select name="kind"><option>Short notes</option><option>NCERT</option><option>Active recall</option><option>Questions / PYQs</option><option>Full chapter</option></select></div></div><button class="btn">Save revision</button></form></div><div class="card"><h3>Revision history</h3>${hist.length?hist.slice(0,60).map(r=>{const rec=r.id?db.revisions.find(x=>x.id===r.id):db.revisions.find(x=>x.chapter===r.chapter&&x.date===r.date);const p=rec?revisionPending(rec):null;const isRed=p&&p.state==='red';return `<div class="list-item" style="align-items:flex-start"><div><b>${esc(r.chapter)}</b> ${isRed?'<span class="tag red">RED ZONE ☠️</span>':''}<div class="muted" style="margin:3px 0 5px">${esc(r.subject)} • ${esc(r.kind)}</div>${rec?revChipsHTML(rec):''}</div><span>${shortDate(r.date)}</span></div>`}).join(''):'<div class="empty">Your revision history will appear here.</div>'}</div></div>`;
 }
 
 window.autoCalcMockScore=()=>{
@@ -3139,7 +3188,7 @@ function keepScroll(fn){const w=document.querySelector('.track-wrap'),x=w?w.scro
 window.setTrackTab=k=>{trackTab=k;render()};
 window.toggleCell=(id,key)=>{const cfg=TRACK[trackTab],c=(db.chapters[cfg.sub]||[]).find(x=>x.id===id);if(!c)return;if(key==='done')c.done=!c.done;else{c.t=c.t||{};if(c.t[key])delete c.t[key];else c.t[key]=today()}save();keepScroll(render)};
 window.addTrackChapter=e=>{e.preventDefault();const cfg=TRACK[trackTab],name=e.target.chapter.value.trim();if(!name)return;const ch={id:crypto.randomUUID(),name,done:false,strength:'Medium',weakTopics:''};if(cfg.branch)ch.branch=cfg.branch;db.chapters[cfg.sub].push(ch);save();keepScroll(render);toast('Chapter added.')};
-function allRevs(){const out=db.revisions.map(r=>({date:r.date,chapter:r.chapter,subject:r.subject,kind:r.kind,r3:r.r3,r7:r.r7,r21:r.r21}));for(const sub of Object.keys(db.chapters))for(const c of db.chapters[sub])for(const [k,d] of Object.entries(c.t||{}))if(/^r\d$/.test(k))out.push({date:d,chapter:c.name,subject:sub,kind:'Revision '+k.slice(1)});return out.sort((a,b)=>b.date.localeCompare(a.date))}
+function allRevs(){const out=db.revisions.map(r=>({id:r.id,date:r.date,chapter:r.chapter,subject:r.subject,kind:r.kind,r3:r.r3,r7:r.r7,r21:r.r21}));for(const sub of Object.keys(db.chapters))for(const c of db.chapters[sub])for(const [k,d] of Object.entries(c.t||{}))if(/^r\d$/.test(k))out.push({date:d,chapter:c.name,subject:sub,kind:'Revision '+k.slice(1)});return out.sort((a,b)=>b.date.localeCompare(a.date))}
 function covg(k,key){const l=tabChapters(TRACK[k]);return l.length?Math.round(l.filter(c=>key==='done'?c.done:(c.t||{})[key]).length/l.length*100):0}
 
 /* Past ~10 years chapter/topic weightage (Ankur Sir style analysis + Biology research). Counts = PYQ frequency. */
@@ -3564,7 +3613,7 @@ function bindForms(){
       try{meta=await storeFile(file)}catch(_){toast('File save nahi hui, bina file ke save kar raha hoon.')}
     }
     db.upcomingTests=db.upcomingTests||[];
-    db.upcomingTests.push({id:crypto.randomUUID(),name:f.elements.name.value.trim(),date:f.date.value,time:f.time.value||'',syllabus:f.syllabus.value.trim(),...(meta?{fileId:meta.id,fileName:meta.name,fileType:meta.type}:{})});
+    db.upcomingTests.push({id:crypto.randomUUID(),name:f.name.value.trim(),date:f.date.value,time:f.time.value||'',syllabus:f.syllabus.value.trim(),...(meta?{fileId:meta.id,fileName:meta.name,fileType:meta.type}:{})});
     save();render();toast('Upcoming test added.');
   });
   bind('testForm',async f=>{
@@ -3637,8 +3686,14 @@ const importFileEl=document.getElementById('importFile');
 if(importBtnEl&&importFileEl)importBtnEl.onclick=()=>importFileEl.click();
 if(importFileEl)importFileEl.onchange=e=>{const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d||!Array.isArray(d.tasks))throw new Error('bad');if(!confirm('Replace current data with this backup?')){e.target.value='';return}db={...seed(),...d};save();render();toast('Backup imported.')}catch(_){toast('Invalid backup file.')}e.target.value=''};r.readAsText(file)};
 
+window.addEventListener('pagehide',()=>{
+  try{flushMissionSession();saveQuizProgress();save()}catch(_){}
+});
+window.addEventListener('beforeunload',()=>{
+  try{flushMissionSession();saveQuizProgress();save()}catch(_){}
+});
 document.addEventListener('visibilitychange',async()=>{
-  if(document.hidden){try{flushMissionSession();saveQuizProgress()}catch(_){}return}
+  if(document.hidden){try{flushMissionSession();saveQuizProgress();save()}catch(_){}return}
   timerTick();
   checkDueReminders();
   const el=document.getElementById('timerFull');
@@ -3669,12 +3724,12 @@ document.addEventListener('visibilitychange',async()=>{
     document.head.appendChild(s);
   }
   const SKIP={SCRIPT:1,STYLE:1,TEXTAREA:1,SELECT:1,OPTION:1,TITLE:1,NOSCRIPT:1,INPUT:1};
-  function esc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function escapeHtml(t){return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
   function fixText(n){
     const p=n.parentNode;
     if(!p||SKIP[p.nodeName]||!window.twemoji||!twemoji.test(n.nodeValue))return;
     const box=document.createElement('span');
-    box.innerHTML=twemoji.parse(esc(n.nodeValue),{folder:'svg',ext:'.svg',className:'emoji'});
+    box.innerHTML=twemoji.parse(escapeHtml(n.nodeValue),{folder:'svg',ext:'.svg',className:'emoji'});
     const frag=document.createDocumentFragment();
     while(box.firstChild)frag.appendChild(box.firstChild);
     p.replaceChild(frag,n);
