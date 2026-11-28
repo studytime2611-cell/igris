@@ -73,6 +73,22 @@ const PRACTICE_SHEET_CATALOG = [
     chapter: 'Cell cycle and cell division',
     count: 139,
     dataKey: 'cell_cycle_ncert'
+  },
+  {
+    id: 'phy-allen-basic-math',
+    subject: 'Physics',
+    book: 'Allen module',
+    chapter: 'Basic Mathematics used in Physics',
+    count: 27,
+    dataKey: 'allen_basic_math'
+  },
+  {
+    id: 'phy-allen-vectors',
+    subject: 'Physics',
+    book: 'Allen module',
+    chapter: 'Vectors',
+    count: 41,
+    dataKey: 'allen_vectors'
   }
 ];
 let practiceSheetSubject = 'Biology';
@@ -91,6 +107,7 @@ function getPracticeSheetQuestions(sheet){
     ans: typeof q.ans === 'number' ? q.ans : 0,
     mark: normalizeMark(q.mark || q.tag || 'Imp'),
     exp: q.exp || '',
+    img: q.img || '',
     sheetId: sheet.id,
     book: sheet.book
   }));
@@ -2486,6 +2503,7 @@ ${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
               </div>
             </div>
             <p style="font-size:13px;font-weight:700;line-height:1.6;margin:10px 0 12px">${esc(q.q)}</p>
+            ${q.img?`<div class="quiz-fig" style="margin:0 0 14px;text-align:center"><img src="${esc(q.img)}" alt="Figure" style="max-width:100%;max-height:320px;border-radius:10px;border:1px solid var(--line);background:#fff" loading="lazy" onerror="this.style.display='none'"></div>`:''}
             ${q.opts.map((opt,i)=>{
               let cls='opt-btn';
               let extraStyle='';
