@@ -94,6 +94,18 @@ const PRACTICE_SHEET_CATALOG = [
 let practiceSheetSubject = 'Biology';
 let practiceSheetBook = null;
 
+function resolveQuizImg(src){
+  if(!src) return '';
+  const s = String(src).trim();
+  if(!s) return '';
+  if(/^(https?:|data:|blob:)/i.test(s)) return s;
+  // Prefer path relative to current page (works on GitHub Pages subfolders + local)
+  try{
+    return new URL(s.replace(/^\.\//,''), document.baseURI || location.href).href;
+  }catch(_){
+    return s;
+  }
+}
 function getPracticeSheetQuestions(sheet){
   const bank = (typeof window !== 'undefined' && window.PRACTICE_SHEET_DATA) ? window.PRACTICE_SHEET_DATA : {};
   const raw = bank[sheet.dataKey];
@@ -2503,7 +2515,11 @@ ${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
               </div>
             </div>
             <p style="font-size:13px;font-weight:700;line-height:1.6;margin:10px 0 12px">${esc(q.q)}</p>
-            ${q.img?`<div class="quiz-fig" style="margin:0 0 14px;text-align:center"><img src="${esc(q.img)}" alt="Figure" style="max-width:100%;max-height:320px;border-radius:10px;border:1px solid var(--line);background:#fff" loading="lazy" onerror="this.style.display='none'"></div>`:''}
+            ${q.img?`<div class="quiz-fig" style="margin:0 0 14px;text-align:center">
+              <img src="${esc(resolveQuizImg(q.img))}" alt="Figure" style="max-width:min(100%,520px);max-height:360px;width:auto;height:auto;border-radius:10px;border:1px solid var(--line);background:#fff;display:inline-block" loading="eager"
+                onerror="this.onerror=null;this.style.display='none';const n=this.nextElementSibling;if(n)n.hidden=false;">
+              <div hidden class="muted" style="font-size:11px;padding:10px;border:1px dashed var(--line);border-radius:8px;margin-top:6px">Figure load nahi hui.<br><code style="font-size:10px">${esc(q.img)}</code><br>Check: project root me <b>images/physics/</b> folder hai?</div>
+            </div>`:''}
             ${q.opts.map((opt,i)=>{
               let cls='opt-btn';
               let extraStyle='';
