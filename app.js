@@ -2108,25 +2108,83 @@ function saveQuizAttemptIfDone(){
 }
 
 const WHY_OPTS=['Silly mistake','Concept gap','Lack of revision','Not reading properly','Calculation','Formula recall','Other'];
+function findMistakeForQuestion(q){
+  if(!q) return null;
+  // 1) linked id from this quiz answer
+  const ans = quizAnswers && quizAnswers[quizIdx];
+  if(ans && ans.mistakeId){
+    const byId = db.mistakes.find(x => x.id === ans.mistakeId);
+    if(byId) return byId;
+  }
+  // 2) match by question text (open mistakes first)
+  const needle = String(q.q || '').slice(0, 60);
+  if(!needle) return null;
+  let m = db.mistakes.find(x => !x.closed && String(x.error || '').includes(needle));
+  if(m) return m;
+  // 3) any mistake (including closed) with same stem
+  m = db.mistakes.find(x => String(x.error || '').includes(needle));
+  return m || null;
+}
 function whyBoxInner(m){
-  const cur=m.type;
-  return `<div class="muted" style="font-size:11px;margin-bottom:8px">Kyu galat hua? <span style="opacity:.7">(Mistake Hunter me save hota hai)</span></div>
-  <div class="why-chips">${WHY_OPTS.map(o=>`<button type="button" class="why-chip ${cur===o?'active':''}" onclick="setWhyWrong('${m.id}','${o}')">${o}</button>`).join('')}</div>
-  ${cur==='Other'?`<input class="why-note" placeholder="Apna reason likho…" value="${esc(m.whyNote||'')}" oninput="setWhyNote('${m.id}',this.value)">`:''}`;
+  if(!m) return '<div class="muted" style="font-size:11px">Mistake link missing — Next pe jaake wapas aao.</div>';
+  const cur = m.type;
+  const mid = String(m.id || '');
+  return `<div class="muted" style="font-size:11px;margin-bottom:8px">Kyu galat hua? <span style="opacity:.7">(Mistake Hunter me save)</span>${cur && cur!=='Untagged'?` · <b style="color:var(--red)">${esc(cur)}</b>`:''}</div>
+  <div class="why-chips" data-mistake-id="${esc(mid)}">${WHY_OPTS.map(o=>`<button type="button" class="why-chip ${cur===o?'active':''}" data-why="${esc(o)}" onclick="event.preventDefault();event.stopPropagation();setWhyWrong('${mid.replace(/'/g,"\'")}','${o.replace(/'/g,"\'")}')">${o}</button>`).join('')}</div>
+  ${cur==='Other'?`<input class="why-note" placeholder="Apna reason likho…" value="${esc(m.whyNote||'')}" oninput="setWhyNote('${mid.replace(/'/g,"\'")}',this.value)">`:''}`;
 }
 function whyForQuestionHTML(q){
   if(!quizAnswered||quizPickedIdx===-1||quizPickedIdx===q.ans)return '';
-  const m=db.mistakes.find(x=>!x.closed&&String(x.error||'').includes(String(q.q||'').slice(0,45)));
-  return m?`<div class="why-box" id="whyBox">${whyBoxInner(m)}</div>`:'';
+  let m = findMistakeForQuestion(q);
+  // auto-create if somehow missing
+  if(!m){
+    m = {
+      id: crypto.randomUUID(),
+      date: today(),
+      subject: q.subject || 'Biology',
+      type: 'Untagged',
+      chapter: q.chapter || 'Quiz Practice',
+      error: `Wrong MCQ: ${q.q} (Picked: ${q.opts[quizPickedIdx]}) | True Answer: ${q.opts[q.ans]}`,
+      fix: q.exp ? `True Answer: ${q.opts[q.ans]}. ${q.exp}` : `True Answer: ${q.opts[q.ans]}.`
+    };
+    db.mistakes = db.mistakes || [];
+    db.mistakes.push(m);
+    if(quizAnswers[quizIdx]) quizAnswers[quizIdx].mistakeId = m.id;
+    save();
+  } else if(quizAnswers[quizIdx] && !quizAnswers[quizIdx].mistakeId){
+    quizAnswers[quizIdx].mistakeId = m.id;
+  }
+  return `<div class="why-box" id="whyBox">${whyBoxInner(m)}</div>`;
 }
-// DOM-only update: no render(), so quiz timer / scroll are untouched
 window.setWhyWrong=(id,opt)=>{
-  const m=db.mistakes.find(x=>x.id===id);if(!m)return;
-  m.type=opt;if(opt!=='Other')delete m.whyNote;
-  save();
-  const el=document.getElementById('whyBox');if(el)el.innerHTML=whyBoxInner(m);
+  try{
+    if(!id || !opt){ toast('Why option missing'); return; }
+    let m = db.mistakes.find(x => x.id === id);
+    if(!m){
+      // fallback: current question's mistake
+      m = activeQuiz && activeQuiz[quizIdx] ? findMistakeForQuestion(activeQuiz[quizIdx]) : null;
+    }
+    if(!m){ toast('Mistake entry nahi mili — dubara answer submit karo'); return; }
+    m.type = opt;
+    if(opt !== 'Other') delete m.whyNote;
+    if(quizAnswers[quizIdx]) quizAnswers[quizIdx].mistakeId = m.id;
+    save();
+    const el = document.getElementById('whyBox');
+    if(el) el.innerHTML = whyBoxInner(m);
+    // also paint chips directly in case DOM id drifted
+    document.querySelectorAll('.why-chip').forEach(btn=>{
+      btn.classList.toggle('active', btn.getAttribute('data-why') === opt);
+    });
+    toast(`Reason: ${opt}`);
+  }catch(e){
+    console.warn('setWhyWrong', e);
+    toast('Why save fail');
+  }
 };
-window.setWhyNote=(id,v)=>{const m=db.mistakes.find(x=>x.id===id);if(m){m.whyNote=v;save()}};
+window.setWhyNote=(id,v)=>{
+  const m = db.mistakes.find(x=>x.id===id) || (activeQuiz && activeQuiz[quizIdx] ? findMistakeForQuestion(activeQuiz[quizIdx]) : null);
+  if(m){ m.whyNote=v; save(); }
+};
 
 window.answerQuizOpt=(choiceIdx)=>{
   // Select only — answer reveals after Submit
@@ -2153,20 +2211,23 @@ window.submitQuizAnswer=()=>{
   }
   if(!isCorrect){
     playSfx('ohno');
-    const exists=db.mistakes.some(m=>!m.closed && m.error.includes(curQ.q.slice(0,45)));
-    if(!exists){
-      db.mistakes.push({
-        id:crypto.randomUUID(),
-        date:today(),
-        subject:curQ.subject||'Biology',
-        type:skipDrill?'Time management':'Untagged',
-        chapter:curQ.chapter||'Quiz Practice',
-        error:`Wrong MCQ [${mk}]: ${curQ.q} (Picked: ${curQ.opts[choiceIdx]}) | True Answer: ${trueAnsText}`,
-        fix:curQ.exp?`True Answer: ${trueAnsText}. ${curQ.exp}`:`True Answer: ${trueAnsText}.`
-      });
-      save();
+    const needle = String(curQ.q||'').slice(0,60);
+    let m = db.mistakes.find(x => !x.closed && String(x.error||'').includes(needle));
+    if(!m){
+      m = {
+        id: crypto.randomUUID(),
+        date: today(),
+        subject: curQ.subject||'Biology',
+        type: skipDrill ? 'Time management' : 'Untagged',
+        chapter: curQ.chapter||'Quiz Practice',
+        error: `Wrong MCQ [${mk}]: ${curQ.q} (Picked: ${curQ.opts[choiceIdx]}) | True Answer: ${trueAnsText}`,
+        fix: curQ.exp ? `True Answer: ${trueAnsText}. ${curQ.exp}` : `True Answer: ${trueAnsText}.`
+      };
+      db.mistakes.push(m);
       toast('Saved to Mistake Hunter with True Answer.');
     }
+    quizAnswers[quizIdx] = {picked: choiceIdx, correct: false, mistakeId: m.id};
+    save();
   }
   if(isCorrect)playSfx('sparkle');
   clearQuizPace();
@@ -2365,9 +2426,13 @@ function practiceView(){
                 <div class="muted" style="margin-top:3px">${esc(s.subject)} · ${esc(s.book)} · ${n} Q${progNote}</div>
                 <div class="actions" style="margin-top:8px;flex-wrap:wrap;gap:5px">
                   <button type="button" class="btn" style="padding:5px 10px" onclick="startPracticeSheet('${s.id}','All')">All (${n})</button>
-                  ${['Imp','Easy','Medium','Hard'].filter(m=>counts[m]>0).map(m=>`<button type="button" class="btn ghost" style="padding:5px 10px;${markBadgeStyle(m)}" onclick="startPracticeSheet('${s.id}','${m}')">${m} (${counts[m]})</button>`).join('')}
-                  ${!Object.values(counts).some(c=>c>0)?`<span class="muted" style="font-size:10px">Levels: saare Imp/untagged — All se start karo</span>`:''}
+                  ${['Imp','Easy','Medium','Hard'].map(m=>{
+                    const c=counts[m]||0;
+                    if(!c) return `<button type="button" class="btn ghost" disabled style="padding:5px 10px;opacity:.4" title="Is sheet me abhi ${m} tagged Q nahi — quiz me TAG se change karo">${m} (0)</button>`;
+                    return `<button type="button" class="btn ghost" style="padding:5px 10px;${markBadgeStyle(m)}" onclick="startPracticeSheet('${s.id}','${m}')">${m} (${c})</button>`;
+                  }).join('')}
                 </div>
+                <p class="muted" style="font-size:10px;margin:6px 0 0;line-height:1.5">Tip: Easy/Medium/Hard ke liye quiz ke andar question pe <b>TAG</b> buttons use karo — count yahan update ho jayega.</p>
               </div>
             </div>`;
           }).join('')}
@@ -2552,14 +2617,23 @@ ${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
           (a.marksSummary||[]).forEach(m=>{const nm=normalizeMark(m.mark||m.tag);if(markCounts[nm]!==undefined)markCounts[nm]++});
           const markBadges=MARKS.filter(k=>markCounts[k]>0).map(k=>`<span class="tag" style="${markBadgeStyle(k)}">${k}: ${markCounts[k]}</span>`).join(' ');
           const speedTag=a.avgSec?`<span class="tag blue">⏱ ${a.avgSec}s/Q</span>`:'';
-          return `<div class="list-item" style="align-items:flex-start">
-            <div>
-              <b>${esc(a.chapter)}</b> <span class="tag blue">${esc(a.subject)}</span> <span class="tag green">${a.score}/${a.total} (${a.accuracy}%)</span> ${speedTag} ${markBadges}
-              <div class="muted" style="margin-top:4px">Attempted on ${esc(a.date)}${a.elapsedSec?' • Total '+fmtMMSS(a.elapsedSec):''}</div>
-              ${a.wrongItems && a.wrongItems.length ? `<div style="margin-top:6px;font-size:11px;color:#fca5a5">Missed ${a.wrongItems.length} Q(s): ${a.wrongItems.map(w=>`${esc(w.q.slice(0,48))} → <b>True: ${esc(w.correct)}</b>`).join(' • ')}</div>`:`<div style="margin-top:5px;font-size:11px;color:#86efac">100% accuracy on attempted questions!</div>`}
+          const wrongN=(a.wrongItems&&a.wrongItems.length)||0;
+          return `<div class="list-item" style="align-items:flex-start;flex-wrap:wrap;gap:8px">
+            <div style="flex:1;min-width:200px">
+              <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+                <b>${esc(a.chapter)}</b>
+                <span class="tag blue">${esc(a.subject)}</span>
+                <span class="tag green">${a.score}/${a.total} (${a.accuracy}%)</span>
+                ${wrongN?`<span class="tag red">✕ ${wrongN} wrong</span>`:'<span class="tag green">100%</span>'}
+                ${speedTag} ${markBadges}
+              </div>
+              <div class="muted" style="margin-top:4px;font-size:10px">${esc(a.date)}${a.elapsedSec?' • '+fmtMMSS(a.elapsedSec):''}</div>
+              ${wrongN?`<details style="margin-top:6px"><summary style="cursor:pointer;font-size:11px;color:#fca5a5">Missed ${wrongN} — expand</summary>
+                <div style="margin-top:6px;font-size:11px;line-height:1.5;color:#fca5a5">${a.wrongItems.map((w,i)=>`<div style="padding:4px 0;border-bottom:1px solid #3a1520"><b>${i+1}.</b> ${esc((w.q||'').slice(0,90))}${ (w.q||'').length>90?'…':'' } <span class="muted">→</span> <b style="color:#86efac">${esc(w.correct||'')}</b></div>`).join('')}</div>
+              </details>`:''}
             </div>
-            <div class="actions">
-              ${a.wrongItems && a.wrongItems.length ? `<button type="button" class="btn danger" style="padding:5px 9px" onclick="retryAttemptWrongQuestions('${a.id}')">Retry Wrong (${a.wrongItems.length})</button>` : ''}
+            <div class="actions" style="flex-shrink:0">
+              ${wrongN?`<button type="button" class="btn danger" style="padding:5px 9px" onclick="retryAttemptWrongQuestions('${a.id}')">Retry (${wrongN})</button>`:''}
               ${a.chapter && a.chapter!=='Mixed Chapters' && qBank.some(q=>q.chapter===a.chapter)?`<button type="button" class="btn secondary" style="padding:5px 9px" data-sub="${esc(a.subject)}" data-chap="${esc(a.chapter)}" onclick="launchChapterBtn(this)">Re-Attempt</button>`:''}
               <button type="button" class="icon-btn" onclick="deleteAttempt('${a.id}')">×</button>
             </div>
