@@ -105,34 +105,101 @@ window.setPracticeSheetBook = book => {
   practiceSheetBook = book;
   render();
 };
-window.startPracticeSheet = id => {
+window.startPracticeSheet = (id, markFilter='All', forceRestart=false) => {
   const sheet = PRACTICE_SHEET_CATALOG.find(s => s.id === id);
   if(!sheet){ toast('Sheet not found.'); return; }
-  const items = getPracticeSheetQuestions(sheet);
+  let items = getPracticeSheetQuestions(sheet);
   if(!items.length){
     toast('Sheet data missing — practice-sheets-data.js load check karo.');
     return;
   }
-  // Merge into quiz bank (dedupe by q text + chapter) so attempts/history stay consistent
+  const mk = markFilter && markFilter !== 'All' ? normalizeMark(markFilter) : 'All';
+  if(mk !== 'All'){
+    items = items.filter(q => normalizeMark(q.mark || q.tag) === mk);
+    if(!items.length){
+      toast(`Is sheet me "${mk}" level ke questions nahi mile. All try karo.`);
+      return;
+    }
+  }
+  // Merge into quiz bank (dedupe by q text + chapter)
   db.quizzes = db.quizzes || [];
   const existing = new Set(db.quizzes.map(x => `${String(x.chapter||'').toLowerCase()}||${String(x.q||'').trim()}`));
   let added = 0;
-  for(const q of items){
-    const key = `${String(q.chapter||'').toLowerCase()}||${String(q.q||'').trim()}`;
-    if(!existing.has(key)){
+  for(const q of getPracticeSheetQuestions(sheet)){
+    const k = `${String(q.chapter||'').toLowerCase()}||${String(q.q||'').trim()}`;
+    if(!existing.has(k)){
       db.quizzes.push({...q});
-      existing.add(key);
+      existing.add(k);
       added++;
     }
   }
   if(added) save();
-  const key = 'sheet:' + sheet.id;
+  const key = 'sheet:' + sheet.id + (mk !== 'All' ? ':' + mk : '');
+  // Resume prompt
+  const prog = (db.quizProgress || {})[key];
+  if(!forceRestart && prog && prog.ids && prog.idx < prog.ids.length){
+    const go = confirm(`Last attempt milaa: Q${(prog.idx||0)+1}/${prog.ids.length} (score ${prog.score||0}).\n\nOK = Continue last attempt\nCancel = Restart from Q1`);
+    if(go){
+      // rebuild from progress ids against sheet items
+      const byId = {};
+      items.forEach(q => { byId[q.id] = q; });
+      const rebuilt = (prog.ids || []).map(i => byId[i]).filter(Boolean);
+      if(rebuilt.length === prog.ids.length){
+        activeQuizKey = key;
+        activeQuizArgs = null;
+        activeQuiz = rebuilt.map(x => ({...x, mark: normalizeMark(x.mark || x.tag)}));
+        activeQuizMeta = prog.meta || { subject: sheet.subject, chapter: `${sheet.book} • ${sheet.chapter}`, sheetId: sheet.id, markFilter: mk };
+        quizIdx = prog.idx || 0;
+        quizScore = prog.score || 0;
+        quizWrongList = prog.wrong || [];
+        quizElapsedSec = prog.elapsed || 0;
+        quizAnswers = prog.answers || {};
+        if(quizAnswers[quizIdx] && quizAnswers[quizIdx].picked !== undefined && quizAnswers[quizIdx].picked !== -1 && !quizAnswers[quizIdx].skipped){
+          quizAnswered = true;
+          quizPickedIdx = quizAnswers[quizIdx].picked;
+        }else{
+          quizAnswered = false;
+          quizPickedIdx = (quizAnswers[quizIdx] && quizAnswers[quizIdx].picked >= 0) ? quizAnswers[quizIdx].picked : null;
+        }
+        skipDrill = false;
+        practiceTab = 'quiz';
+        render();
+        toast(`Continue: Q${quizIdx+1}/${activeQuiz.length}`);
+        return;
+      }
+    }else{
+      delete db.quizProgress[key];
+      save();
+    }
+  }
   beginQuizSession(items, {
     subject: sheet.subject,
-    chapter: `${sheet.book} • ${sheet.chapter}`,
-    sheetId: sheet.id
+    chapter: `${sheet.book} • ${sheet.chapter}` + (mk !== 'All' ? ` • ${mk}` : ''),
+    sheetId: sheet.id,
+    markFilter: mk
   }, key, null);
-  toast(`${sheet.chapter}: ${items.length} Q started${added?` (+${added} bank me)`:''}`);
+  toast(`${sheet.chapter}${mk!=='All'?' ['+mk+']':''}: ${items.length} Q started${added?` (+${added} bank)`:''}`);
+};
+
+window.promptStartPracticeSheet = id => {
+  const sheet = PRACTICE_SHEET_CATALOG.find(s => s.id === id);
+  if(!sheet){ toast('Sheet not found.'); return; }
+  const all = getPracticeSheetQuestions(sheet);
+  if(!all.length){ toast('Sheet data missing.'); return; }
+  const counts = { All: all.length, Imp: 0, Easy: 0, Medium: 0, Hard: 0 };
+  all.forEach(q => {
+    const m = normalizeMark(q.mark || q.tag);
+    if(counts[m] !== undefined) counts[m]++;
+  });
+  // level picker via simple prompt chain — UI chips are preferred in sheet list
+  const levels = ['All','Imp','Easy','Medium','Hard'].filter(l => l==='All' || counts[l] > 0);
+  const label = levels.map(l => `${l}(${counts[l]})`).join(' / ');
+  const pick = prompt(`Level select karo:\n${label}\n\nType: All / Imp / Easy / Medium / Hard`, 'All');
+  if(pick === null) return;
+  const chosen = String(pick).trim();
+  const norm = chosen.toLowerCase() === 'all' ? 'All' : normalizeMark(chosen);
+  if(norm !== 'All' && !counts[norm]){ toast(`"${chosen}" level is sheet me nahi hai.`); return; }
+  startPracticeSheet(id, norm);
 };
 
 
@@ -574,7 +641,11 @@ document.addEventListener('keydown',e=>{
   }else if(k==='s'||k==='S'){
     e.preventDefault();
     if(!quizAnswered)skipQuizQuestion();
-  }else if(k==='n'||k==='N'||k==='Enter'){
+  }else if(k==='Enter'){
+    e.preventDefault();
+    if(!quizAnswered && quizPickedIdx!==null && quizPickedIdx>=0) submitQuizAnswer();
+    else if(quizAnswered) nextQuizQuestion();
+  }else if(k==='n'||k==='N'){
     e.preventDefault();
     if(quizAnswered)nextQuizQuestion();
   }else if(k==='p'||k==='P'||k==='Backspace'){
@@ -770,7 +841,19 @@ function stat(label,value,note){return `<div class="stat"><div class="stat-label
 function progress(label,done,total){let p=total?Math.round(done/total*100):0;return `<div class="progress-row"><div class="progress-meta"><span>${label}</span><span>${p}%</span></div><div class="bar"><span style="width:${p}%"></span></div></div>`}
 function todayTasks(){return db.tasks.filter(t=>isDaily(t)&&t.date===today())}
 function totalMinutes(){return db.sessions.filter(s=>s.date===today()).reduce((a,s)=>a+s.minutes,0)}
-function totalQuestionsToday(){return db.sessions.filter(s=>s.date===today()).reduce((a,s)=>a+(s.questions||0),0)}
+function totalQuestionsToday(){
+  let n = db.sessions.filter(s=>s.date===today()).reduce((a,s)=>a+(s.questions||0),0);
+  // completed quiz attempts today
+  for(const a of (db.quizAttempts||[])){
+    if(a.date===today()) n += (a.total||0);
+  }
+  // in-progress quiz answers (not yet finished)
+  if(activeQuiz && quizAnswers){
+    const answered = Object.values(quizAnswers).filter(x=>x && (x.picked!==undefined)).length;
+    n += answered;
+  }
+  return n;
+}
 function examDate(){return db.settings.examDate||'2027-05-02'}
 
 function getCountdownParts(){
@@ -1477,7 +1560,34 @@ function markBadgeStyle(mk){
 window.setPracticeTab=t=>{clearInterval(quizClockInterval);practiceTab=t;render()};
 window.setAttemptChapterFilter=ch=>{attemptChapterFilter=ch;render()};
 window.selectQuizSubject=sub=>{selectedQuizSubject=sub;render()};
-window.exitActiveQuiz=()=>{clearQuizPace();clearInterval(quizClockInterval);saveQuizProgress();activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;quizAnswers={};skipDrill=false;render()};
+window.exitActiveQuiz=(force)=>{
+  if(!force && activeQuiz && quizIdx < activeQuiz.length){
+    const answered = Object.keys(quizAnswers||{}).length;
+    const msg = answered
+      ? `Quiz chhod rahe ho?\n\n• OK = Progress save karke exit (Q${quizIdx+1}/${activeQuiz.length}, ${answered} answered)\n• Cancel = wapas quiz pe`
+      : `Quiz exit karein? Progress abhi nahi hai.`;
+    if(!confirm(msg)) return;
+  }
+  clearQuizPace();
+  clearInterval(quizClockInterval);
+  if(activeQuiz && quizIdx < activeQuiz.length) saveQuizProgress();
+  activeQuiz=null;quizIdx=0;quizAnswered=false;quizPickedIdx=null;quizElapsedSec=0;quizAnswers={};skipDrill=false;
+  render();
+};
+window.finishQuizEarly=()=>{
+  if(!activeQuiz)return;
+  if(!confirm('Abhi tak ke answers submit karke attempt save karein?'))return;
+  clearQuizPace();
+  // mark remaining unanswered as skipped
+  for(let i=0;i<activeQuiz.length;i++){
+    if(!quizAnswers[i]) quizAnswers[i]={picked:-1,correct:false,skipped:true};
+  }
+  recomputeQuizScore();
+  quizIdx=activeQuiz.length;
+  saveQuizAttemptIfDone();
+  render();
+  playSfx('guitar');
+};
 window.launchChapterBtn=btn=>{
   const sub=btn?.dataset?.sub||'All';
   const chap=btn?.dataset?.chap||'All';
@@ -1637,7 +1747,11 @@ window.restartActiveQuiz=()=>{
   const key=activeQuizKey;
   activeQuiz=null;
   if(String(key).startsWith('sheet:')){
-    startPracticeSheet(String(key).slice(6));
+    const rest=String(key).slice(6); // id or id:Mark
+    const parts=rest.split(':');
+    const sid=parts[0];
+    const mk=parts[1]||'All';
+    startPracticeSheet(sid, mk, true);
     return;
   }
   if(!activeQuizArgs){toast('Is quiz ko restart nahi kar sakte.');return}
@@ -1912,24 +2026,32 @@ window.startSavedQuiz=(subFilter='All',chapFilter='All',markFilter='All')=>{
   const key=quizKey(subFilter,chapFilter,markFilter);
   const prog=(db.quizProgress||{})[key];
   if(prog&&prog.ids&&prog.idx<prog.ids.length){
-    const bank=db.quizzes||[];
-    const rebuilt=prog.ids.map(id=>bank.find(q=>q.id===id)).filter(Boolean);
-    if(rebuilt.length===prog.ids.length){
-      activeQuiz=rebuilt.map(x=>({...x,mark:normalizeMark(x.mark||x.tag)}));
-      activeQuizMeta=prog.meta||{subject:subFilter,chapter:labelChap};
-      activeQuizKey=key;
-      activeQuizArgs=[subFilter,chapFilter,markFilter];
-      quizIdx=prog.idx;quizScore=prog.score||0;quizWrongList=prog.wrong||[];quizElapsedSec=prog.elapsed||0;
-      quizAnswers=prog.answers||{};
-      if(quizAnswers[quizIdx]){quizAnswered=true;quizPickedIdx=quizAnswers[quizIdx].picked}
-      else{quizAnswered=!!prog.answered;quizPickedIdx=quizAnswered?prog.picked:null}
-      skipDrill=!!(activeQuizMeta&&activeQuizMeta.skipDrill);
-      practiceTab='quiz';
-      render();
-      toast(`Resume: Q${quizIdx+1}/${activeQuiz.length}. Naya shuru karna ho to ↺ Restart dabao.`);
-      return;
+    const go=confirm(`Last attempt: Q${(prog.idx||0)+1}/${prog.ids.length} (score ${prog.score||0}).\n\nOK = Continue\nCancel = Restart from Q1`);
+    if(go){
+      const bank=db.quizzes||[];
+      const rebuilt=prog.ids.map(id=>bank.find(q=>q.id===id)).filter(Boolean);
+      if(rebuilt.length===prog.ids.length){
+        activeQuiz=rebuilt.map(x=>({...x,mark:normalizeMark(x.mark||x.tag)}));
+        activeQuizMeta=prog.meta||{subject:subFilter,chapter:labelChap};
+        activeQuizKey=key;
+        activeQuizArgs=[subFilter,chapFilter,markFilter];
+        quizIdx=prog.idx;quizScore=prog.score||0;quizWrongList=prog.wrong||[];quizElapsedSec=prog.elapsed||0;
+        quizAnswers=prog.answers||{};
+        if(quizAnswers[quizIdx] && quizAnswers[quizIdx].picked!==undefined && quizAnswers[quizIdx].picked!==-1 && !quizAnswers[quizIdx].skipped){
+          quizAnswered=true;quizPickedIdx=quizAnswers[quizIdx].picked;
+        }else{
+          quizAnswered=false;
+          quizPickedIdx=(quizAnswers[quizIdx]&&quizAnswers[quizIdx].picked>=0)?quizAnswers[quizIdx].picked:null;
+        }
+        skipDrill=!!(activeQuizMeta&&activeQuizMeta.skipDrill);
+        practiceTab='quiz';
+        render();
+        toast(`Continue: Q${quizIdx+1}/${activeQuiz.length}`);
+        return;
+      }
     }
     delete db.quizProgress[key];
+    save();
   }
   beginQuizSession(pool,{subject:subFilter,chapter:labelChap},key,[subFilter,chapFilter,markFilter]);
 };
@@ -2007,9 +2129,19 @@ window.setWhyWrong=(id,opt)=>{
 window.setWhyNote=(id,v)=>{const m=db.mistakes.find(x=>x.id===id);if(m){m.whyNote=v;save()}};
 
 window.answerQuizOpt=(choiceIdx)=>{
+  // Select only — answer reveals after Submit
   if(quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
-  quizAnswered=true;
   quizPickedIdx=choiceIdx;
+  render();
+};
+window.submitQuizAnswer=()=>{
+  if(quizAnswered||!activeQuiz||!activeQuiz[quizIdx])return;
+  if(quizPickedIdx===null||quizPickedIdx===undefined||quizPickedIdx<0){
+    toast('Pehle option select karo, phir Submit.');
+    return;
+  }
+  quizAnswered=true;
+  const choiceIdx=quizPickedIdx;
   const curQ=activeQuiz[quizIdx];
   const mk=normalizeMark(curQ.mark||curQ.tag);
   const isCorrect=choiceIdx===curQ.ans;
@@ -2220,14 +2352,23 @@ function practiceView(){
           </div>
           <div class="eyebrow" style="margin-bottom:8px">${esc(activeBook)} • ${bookSheets.length} sheet(s)</div>
           ${bookSheets.map(s=>{
-            const live = getPracticeSheetQuestions(s).length;
-            const n = live || s.count || 0;
-            return `<div class="list-item">
-              <div>
+            const qs = getPracticeSheetQuestions(s);
+            const n = qs.length || s.count || 0;
+            const counts = {Imp:0,Easy:0,Medium:0,Hard:0};
+            qs.forEach(q=>{const m=normalizeMark(q.mark||q.tag);if(counts[m]!==undefined)counts[m]++});
+            const progKey = 'sheet:'+s.id;
+            const prog = (db.quizProgress||{})[progKey];
+            const progNote = prog && prog.idx < (prog.ids||[]).length ? ` · ▶ Q${(prog.idx||0)+1}/${(prog.ids||[]).length}` : '';
+            return `<div class="list-item" style="align-items:flex-start;flex-wrap:wrap">
+              <div style="flex:1;min-width:180px">
                 <b>${esc(s.chapter)}</b>
-                <div class="muted" style="margin-top:3px">${esc(s.subject)} · ${esc(s.book)} · ${n} Q</div>
+                <div class="muted" style="margin-top:3px">${esc(s.subject)} · ${esc(s.book)} · ${n} Q${progNote}</div>
+                <div class="actions" style="margin-top:8px;flex-wrap:wrap;gap:5px">
+                  <button type="button" class="btn" style="padding:5px 10px" onclick="startPracticeSheet('${s.id}','All')">All (${n})</button>
+                  ${['Imp','Easy','Medium','Hard'].filter(m=>counts[m]>0).map(m=>`<button type="button" class="btn ghost" style="padding:5px 10px;${markBadgeStyle(m)}" onclick="startPracticeSheet('${s.id}','${m}')">${m} (${counts[m]})</button>`).join('')}
+                  ${!Object.values(counts).some(c=>c>0)?`<span class="muted" style="font-size:10px">Levels: saare Imp/untagged — All se start karo</span>`:''}
+                </div>
               </div>
-              <button type="button" class="btn" onclick="startPracticeSheet('${s.id}')">Start Quiz →</button>
             </div>`;
           }).join('')}
         `;
@@ -2257,13 +2398,13 @@ ${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
             ${activeQuiz && quizIdx < activeQuiz.length ? `<span class="tag gold" style="font-size:11px">⏱ <b id="quizLiveClock">${fmtMMSS(quizElapsedSec)}</b> • ${Math.max(1,Math.round(quizElapsedSec/Math.max(quizIdx+(quizAnswered?1:0),1)))}s/Q</span>` : ''}
             ${activeQuiz && quizIdx < activeQuiz.length && getQuizPaceSec() ? `<span class="tag" style="font-size:11px;${quizPaceLeft<=10?'background:#4a1019;border-color:#ef4444;color:#fecaca':''}">⏳ <b id="quizPaceClock">${quizPaceLeft||getQuizPaceSec()}</b>s</span>` : ''}
             ${activeQuiz && quizIdx<activeQuiz.length && activeQuizKey ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="restartActiveQuiz()">↺ Restart</button>` : ''}
-            ${activeQuiz ? `<button type="button" class="btn secondary" style="padding:5px 10px" onclick="exitActiveQuiz()">← Back</button>` : selectedQuizSubject ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="selectQuizSubject(null)">← Back</button>` : ''}
+            ${activeQuiz ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="finishQuizEarly()" title="Submit attempt abhi">Submit quiz</button><button type="button" class="btn secondary" style="padding:5px 10px" onclick="exitActiveQuiz()">← Exit</button>` : selectedQuizSubject ? `<button type="button" class="btn ghost" style="padding:5px 10px" onclick="selectQuizSubject(null)">← Back</button>` : ''}
           </div>
         </div>
         ${!activeQuiz?`<div class="actions" style="margin-bottom:10px;flex-wrap:wrap;gap:6px;align-items:center">
           <span class="muted" style="font-size:11px">Pace / Q:</span>
           ${[0,45,60,90].map(s=>`<button type="button" class="btn ${getQuizPaceSec()===s?'':'ghost'}" style="padding:4px 9px;font-size:10px" onclick="setQuizPace(${s})">${s===0?'OFF':s+'s'}</button>`).join('')}
-          <span class="muted" style="font-size:10px">• Keys: 1–4 answer · S skip · N next · P prev</span>
+          <span class="muted" style="font-size:10px">• Keys: 1–4 select · Enter submit · S skip · N next · P prev</span>
         </div>`:''}
 
         ${activeQuiz && quizIdx < activeQuiz.length ? (()=>{
@@ -2288,8 +2429,10 @@ ${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
                 extraStyle='background:#103827;border-color:#22c55e;color:#dcfce7';
               }else if(quizAnswered && i===quizPickedIdx && i!==q.ans){
                 extraStyle='background:#4a1019;border-color:#ef4444;color:#fecaca';
+              }else if(!quizAnswered && quizPickedIdx===i){
+                extraStyle='background:var(--soft);border-color:var(--red);box-shadow:0 0 0 2px #c9273818';
               }
-              return `<button type="button" class="${cls}" style="${extraStyle}" ${quizAnswered?'disabled':''} onclick="answerQuizOpt(${i})"><b>${String.fromCharCode(65+i)}.</b> <span>${esc(opt)}</span>${quizAnswered && i===q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#86efac">✓ TRUE ANSWER</span>' : quizAnswered && i===quizPickedIdx && i!==q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#fca5a5">✕ WRONG</span>' : ''}</button>`;
+              return `<button type="button" class="${cls}" style="${extraStyle}" ${quizAnswered?'disabled':''} onclick="answerQuizOpt(${i})"><b>${String.fromCharCode(65+i)}.</b> <span>${esc(opt)}</span>${quizAnswered && i===q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#86efac">✓ TRUE ANSWER</span>' : quizAnswered && i===quizPickedIdx && i!==q.ans ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:#fca5a5">✕ WRONG</span>' : (!quizAnswered && quizPickedIdx===i ? ' <span style="margin-left:auto;font-size:10px;font-weight:800;color:var(--red)">● SELECTED</span>' : '')}</button>`;
             }).join('')}
             ${(()=>{
               const qid=q.id||('idx-'+quizIdx);
@@ -2307,8 +2450,9 @@ ${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
             ${whyForQuestionHTML(q)}`:''}
             <div class="actions" style="margin-top:12px;flex-wrap:wrap;justify-content:space-between">
               <button type="button" class="btn secondary" ${quizIdx<=0?'disabled style="opacity:.4"':''} onclick="prevQuizQuestion()">← Previous</button>
-              <div class="actions" style="gap:8px">
+              <div class="actions" style="gap:8px;flex-wrap:wrap">
                 ${!quizAnswered?`<button type="button" class="btn ghost" onclick="skipQuizQuestion()">Skip →</button>`:''}
+                ${!quizAnswered?`<button type="button" class="btn" ${quizPickedIdx===null||quizPickedIdx<0?'disabled style="opacity:.45"':''} onclick="submitQuizAnswer()">Submit Answer</button>`:''}
                 ${quizAnswered?`<button type="button" class="btn" onclick="nextQuizQuestion()">${quizIdx+1<activeQuiz.length?'Next Question →':'Finish & Save Attempt'}</button>`:''}
               </div>
             </div>`;
