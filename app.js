@@ -99,13 +99,44 @@ function resolveQuizImg(src){
   const s = String(src).trim();
   if(!s) return '';
   if(/^(https?:|data:|blob:)/i.test(s)) return s;
-  // Prefer path relative to current page (works on GitHub Pages subfolders + local)
-  try{
-    return new URL(s.replace(/^\.\//,''), document.baseURI || location.href).href;
-  }catch(_){
-    return s;
-  }
+  try{ return new URL(s.replace(/^\.\//,''), document.baseURI || location.href).href; }
+  catch(_){ return s; }
 }
+function quizImgCandidates(src){
+  if(!src) return [];
+  const s = String(src).trim();
+  if(!s) return [];
+  if(/^(https?:|data:|blob:)/i.test(s)) return [s];
+  const base = s.split('/').pop();
+  // Try common layouts: nested folder (recommended) + repo root (user upload style)
+  const list = [
+    s,
+    s.replace(/^\.\//,''),
+    'images/physics/' + base,
+    './images/physics/' + base,
+    'images/' + base,
+    base,
+    './' + base
+  ];
+  // unique preserve order
+  return [...new Set(list.filter(Boolean))];
+}
+window.quizImgError = function(el){
+  try{
+    const cands = (el.dataset.cands || '').split('|').filter(Boolean);
+    let i = parseInt(el.dataset.i || '0', 10);
+    i += 1;
+    if(i < cands.length){
+      el.dataset.i = String(i);
+      el.src = resolveQuizImg(cands[i]);
+      return;
+    }
+    el.style.display = 'none';
+    const n = el.nextElementSibling;
+    if(n) n.hidden = false;
+  }catch(e){ console.warn(e); }
+}
+
 function getPracticeSheetQuestions(sheet){
   const bank = (typeof window !== 'undefined' && window.PRACTICE_SHEET_DATA) ? window.PRACTICE_SHEET_DATA : {};
   const raw = bank[sheet.dataKey];
@@ -2516,9 +2547,11 @@ ${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
             </div>
             <p style="font-size:13px;font-weight:700;line-height:1.6;margin:10px 0 12px">${esc(q.q)}</p>
             ${q.img?`<div class="quiz-fig" style="margin:0 0 14px;text-align:center">
-              <img src="${esc(resolveQuizImg(q.img))}" alt="Figure" style="max-width:min(100%,520px);max-height:360px;width:auto;height:auto;border-radius:10px;border:1px solid var(--line);background:#fff;display:inline-block" loading="eager"
-                onerror="this.onerror=null;this.style.display='none';const n=this.nextElementSibling;if(n)n.hidden=false;">
-              <div hidden class="muted" style="font-size:11px;padding:10px;border:1px dashed var(--line);border-radius:8px;margin-top:6px">Figure load nahi hui.<br><code style="font-size:10px">${esc(q.img)}</code><br>Check: project root me <b>images/physics/</b> folder hai?</div>
+              <img src="${esc(resolveQuizImg(quizImgCandidates(q.img)[0]||q.img))}" alt="Figure"
+                data-cands="${esc(quizImgCandidates(q.img).join('|'))}" data-i="0"
+                style="max-width:min(100%,520px);max-height:360px;width:auto;height:auto;border-radius:10px;border:1px solid var(--line);background:#fff;display:inline-block"
+                loading="eager" onerror="quizImgError(this)">
+              <div hidden class="muted" style="font-size:11px;padding:10px;border:1px dashed var(--line);border-radius:8px;margin-top:6px">Figure load nahi hui.<br>Tried: <code style="font-size:10px">${esc(quizImgCandidates(q.img).join(' · '))}</code><br>GitHub pe image <b>root</b> ya <b>images/physics/</b> me honi chahiye.</div>
             </div>`:''}
             ${q.opts.map((opt,i)=>{
               let cls='opt-btn';
