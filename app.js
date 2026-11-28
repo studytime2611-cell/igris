@@ -62,6 +62,80 @@ const SAMPLE_JSON=JSON.stringify([
   }
 ],null,2);
 
+/* ===== Practice Sheets (curated NCERT / coaching packs) =====
+   Add new sheets here + matching key in PRACTICE_SHEET_DATA (practice-sheets-data.js).
+   Clicking a sheet starts the same quiz runner as Bulk JSON Practice. */
+const PRACTICE_SHEET_CATALOG = [
+  {
+    id: 'bio-ncert-cell-cycle',
+    subject: 'Biology',
+    book: 'NCERT to NCERT',
+    chapter: 'Cell cycle and cell division',
+    count: 139,
+    dataKey: 'cell_cycle_ncert'
+  }
+];
+let practiceSheetSubject = 'Biology';
+let practiceSheetBook = null;
+
+function getPracticeSheetQuestions(sheet){
+  const bank = (typeof window !== 'undefined' && window.PRACTICE_SHEET_DATA) ? window.PRACTICE_SHEET_DATA : {};
+  const raw = bank[sheet.dataKey];
+  if(!Array.isArray(raw) || !raw.length) return [];
+  return raw.map((q,i)=>({
+    id: q.id || (`sheet-${sheet.id}-${i}`),
+    subject: q.subject || sheet.subject,
+    chapter: q.chapter || sheet.chapter,
+    q: q.q,
+    opts: Array.isArray(q.opts) ? q.opts.slice() : [],
+    ans: typeof q.ans === 'number' ? q.ans : 0,
+    mark: normalizeMark(q.mark || q.tag || 'Imp'),
+    exp: q.exp || '',
+    sheetId: sheet.id,
+    book: sheet.book
+  }));
+}
+
+window.setPracticeSheetSubject = sub => {
+  practiceSheetSubject = sub;
+  practiceSheetBook = null;
+  render();
+};
+window.setPracticeSheetBook = book => {
+  practiceSheetBook = book;
+  render();
+};
+window.startPracticeSheet = id => {
+  const sheet = PRACTICE_SHEET_CATALOG.find(s => s.id === id);
+  if(!sheet){ toast('Sheet not found.'); return; }
+  const items = getPracticeSheetQuestions(sheet);
+  if(!items.length){
+    toast('Sheet data missing — practice-sheets-data.js load check karo.');
+    return;
+  }
+  // Merge into quiz bank (dedupe by q text + chapter) so attempts/history stay consistent
+  db.quizzes = db.quizzes || [];
+  const existing = new Set(db.quizzes.map(x => `${String(x.chapter||'').toLowerCase()}||${String(x.q||'').trim()}`));
+  let added = 0;
+  for(const q of items){
+    const key = `${String(q.chapter||'').toLowerCase()}||${String(q.q||'').trim()}`;
+    if(!existing.has(key)){
+      db.quizzes.push({...q});
+      existing.add(key);
+      added++;
+    }
+  }
+  if(added) save();
+  const key = 'sheet:' + sheet.id;
+  beginQuizSession(items, {
+    subject: sheet.subject,
+    chapter: `${sheet.book} • ${sheet.chapter}`,
+    sheetId: sheet.id
+  }, key, null);
+  toast(`${sheet.chapter}: ${items.length} Q started${added?` (+${added} bank me)`:''}`);
+};
+
+
 function loadQuizzesBucket(fallback=[]){
   try{
     const raw=localStorage.getItem(QUIZ_KEY);
@@ -1555,13 +1629,19 @@ function saveQuizProgress(){
   save();
 }
 window.restartActiveQuiz=()=>{
-  if(!activeQuizKey||!activeQuizArgs){toast('Is quiz ko restart nahi kar sakte.');return}
+  if(!activeQuizKey){toast('Is quiz ko restart nahi kar sakte.');return}
   if(!confirm('Quiz reset karke pehle question se shuru karein?'))return;
-  const args=activeQuizArgs;
   if(db.quizProgress)delete db.quizProgress[activeQuizKey];
   save();
   clearInterval(quizClockInterval);
+  const key=activeQuizKey;
   activeQuiz=null;
+  if(String(key).startsWith('sheet:')){
+    startPracticeSheet(String(key).slice(6));
+    return;
+  }
+  if(!activeQuizArgs){toast('Is quiz ko restart nahi kar sakte.');return}
+  const args=activeQuizArgs;
   startSavedQuiz(args[0],args[1],args[2]);
 };
 window.resetChapterProgress=btn=>{
@@ -2105,14 +2185,57 @@ function practiceView(){
   });
   const chapSummaryList=Object.values(chapStatsMap).map(x=>({...x,acc:x.totalQ?Math.round(x.rightQ/x.totalQ*100):0}));
 
+  const sheetCount = PRACTICE_SHEET_CATALOG.reduce((n,s)=>n+(s.count||0),0);
   return `<div class="tabs">
+    <button type="button" class="tab ${practiceTab==='sheets'?'active':''}" onclick="setPracticeTab('sheets')">Practice Sheets <b>${PRACTICE_SHEET_CATALOG.length}</b></button>
     <button type="button" class="tab ${practiceTab==='quiz'?'active':''}" onclick="setPracticeTab('quiz')">Bulk JSON MCQ Quiz <b>${qBank.length}</b></button>
     <button type="button" class="tab ${practiceTab==='attempts'?'active':''}" onclick="setPracticeTab('attempts')">Saved Attempts <b>${attempts.length}</b></button>
     <button type="button" class="tab ${practiceTab==='retest'?'active':''}" onclick="setPracticeTab('retest')">Mistake Re-Test <b>${openMistakes.length}</b></button>
     <button type="button" class="tab ${practiceTab==='skipdrill'?'active':''}" onclick="setPracticeTab('skipdrill')">Skip Drill</button>
   </div>
 
-  ${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
+  
+  ${practiceTab==='sheets' && !(activeQuiz)?`
+    <div class="card" style="margin-bottom:14px">
+      <div class="section-head" style="margin-top:0">
+        <h2>Practice Sheets</h2>
+        <small>CURATED NCERT / COACHING PACKS • SAME QUIZ RUNNER</small>
+      </div>
+      <p class="muted" style="font-size:12px;line-height:1.7;max-width:640px;margin:0 0 14px">Subject → Book → Chapter sheet pe click karo. Quiz structure Bulk Practice jaisa hi hai (keys 1–4, skip, review, pace, resume).</p>
+      <div class="tabs three" style="margin-bottom:14px">
+        ${['Physics','Chemistry','Biology'].map(s=>`<button type="button" class="tab ${practiceSheetSubject===s?'active':''}" onclick="setPracticeSheetSubject('${s}')">${s}</button>`).join('')}
+      </div>
+      ${(()=>{
+        const subSheets = PRACTICE_SHEET_CATALOG.filter(s=>s.subject===practiceSheetSubject);
+        if(!subSheets.length){
+          return `<div class="empty">Is subject ke liye abhi koi sheet nahi. Baad mein JSON pack add hoga 🤝</div>`;
+        }
+        const books = [...new Set(subSheets.map(s=>s.book))];
+        if(practiceSheetBook && !books.includes(practiceSheetBook)) practiceSheetBook = null;
+        const activeBook = practiceSheetBook || books[0];
+        const bookSheets = subSheets.filter(s=>s.book===activeBook);
+        return `
+          <div class="actions" style="flex-wrap:wrap;margin-bottom:12px;gap:6px">
+            ${books.map(b=>`<button type="button" class="btn ${b===activeBook?'':'ghost'}" style="padding:6px 12px" onclick="setPracticeSheetBook('${esc(b)}')">${esc(b)}</button>`).join('')}
+          </div>
+          <div class="eyebrow" style="margin-bottom:8px">${esc(activeBook)} • ${bookSheets.length} sheet(s)</div>
+          ${bookSheets.map(s=>{
+            const live = getPracticeSheetQuestions(s).length;
+            const n = live || s.count || 0;
+            return `<div class="list-item">
+              <div>
+                <b>${esc(s.chapter)}</b>
+                <div class="muted" style="margin-top:3px">${esc(s.subject)} · ${esc(s.book)} · ${n} Q</div>
+              </div>
+              <button type="button" class="btn" onclick="startPracticeSheet('${s.id}')">Start Quiz →</button>
+            </div>`;
+          }).join('')}
+        `;
+      })()}
+    </div>
+  `:''}
+
+${practiceTab==='skipdrill'&&!(activeQuiz&&skipDrill)?`
     <div class="card">
       <h3>Negative marking drill (+4 / −1 / skip 0)</h3>
       <p class="muted" style="font-size:12px;line-height:1.7;max-width:560px">NEET mein har galat jawab −1. 50/50 pe attempt karna aksar score khaata hai. Is drill mein Skip allowed hai — end pe net marks vs “forced attempt” baseline dikhega.</p>
